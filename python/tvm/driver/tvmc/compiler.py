@@ -23,10 +23,12 @@ import tarfile
 from pathlib import Path
 
 import tvm
+import tvm.micro as micro
 from tvm import autotvm, auto_scheduler
 from tvm import relay
 from tvm.contrib import cc
 from tvm.contrib import utils
+from tvm.micro.contrib import zephyr
 
 from . import common, frontends
 from .main import register_parser
@@ -71,9 +73,23 @@ def add_compile_parser(subparsers):
         help="output the compiled module to an archive",
     )
     parser.add_argument(
+        "--micro",
+        help="enable use of microTVM as part of the target",
+        action="store_true",
+        required=False,
+    )
+    parser.add_argument(
         "--target",
         help="compilation target as plain string, inline JSON or path to a JSON file",
         required=True,
+    )
+    parser.add_argument(
+        "--board",
+        help="compilation board used in conjunction with target when microTVM is used",
+    )
+    parser.add_argument(
+        "--sdk",
+        help="SDK used if microTVM is selected. Currently available are: zephyr|none",
     )
     parser.add_argument(
         "--tuning-records",
@@ -104,31 +120,62 @@ def drive_compile(args):
 
     """
 
-    graph, lib, params, dumps = compile_model(
+    gm, dumps = compile_model(
         args.FILE,
         args.target,
+        args.board,
         args.dump_code,
         None,
         args.model_format,
         args.tuning_records,
         args.desired_layout,
+        args.micro,
     )
 
     if dumps:
         save_dumps(args.output, dumps)
 
-    save_module(args.output, graph, lib, params, args.cross_compiler)
+    if args.micro:
+        print("Skipping graph, lib, and params .tar since microTVM is used")
+        micro_sdk(args.sdk, args.board, gm, debug=True)
+    else:
+        save_module(args.output, gm.get_json(), gm.get_lib(), gm.get_params(), args.cross_compiler)
     return 0
 
+AVAILABLE_SDKS=["zephyr", "none"]
+def micro_sdk(sdk, board, graph_module, debug=False):
+    if sdk not in AVAILABLE_SDKS:
+        raise "Invalid backend"
+    else:
+        print(f"Found µTVM SDK: {sdk}\n")
+        print(f"Preparing image using {sdk}...\n")
+
+        project_dir = "/home/gromero/git/tvm/tests/micro/qemu/zephyr-runtime"
+        compiler = zephyr.ZephyrCompiler(project_dir=project_dir,
+                                         board=board,
+                                         zephyr_toolchain_variant="zephyr",)
+        compiler_opts = tvm.micro.default_options(f"{project_dir}/crt")
+        compiler_workspace = tvm.micro.Workspace(debug=debug)
+        compiler_module = graph_module.get_lib()
+        binary = tvm.micro.build_static_runtime(compiler_workspace,
+                                                compiler,
+                                                compiler_module,
+                                                lib_opts=compiler_opts['lib_opts'],
+                                                bin_opts=compiler_opts['bin_opts'],
+                                                extra_libs=[os.path.join(tvm.micro.build.CRT_ROOT_DIR, "memory")],)
+#       print(type(binary))
+        binary.archive("./")
 
 def compile_model(
     path,
     target,
+    board,
     dump_code=None,
     target_host=None,
     model_format=None,
     tuning_records=None,
     alter_layout=None,
+    micro=False,
 ):
     """Compile a model from a supported framework into a TVM module.
 
@@ -177,7 +224,13 @@ def compile_model(
     if alter_layout:
         mod = common.convert_graph_layout(mod, alter_layout)
 
-    tvm_target = common.target_from_cli(target)
+    if micro:
+        print("Use microTVM")
+        tvm_target = tvm.target.target.micro(target)
+        tvm_board = board
+    else:
+        tvm_target = common.target_from_cli(target)
+
     target_host = tvm_target if not target_host else target_host
 
     if tuning_records and os.path.exists(tuning_records):
@@ -206,9 +259,16 @@ def compile_model(
                         mod, tvm_target, params=params, target_host=target_host
                     )
     else:
-        with tvm.transform.PassContext(opt_level=3):
-            logger.debug("building relay graph (no tuning records provided)")
-            graph_module = relay.build(mod, tvm_target, params=params, target_host=target_host)
+        if micro:
+            with tvm.transform.PassContext(opt_level=3,
+                                           config={"tir.disable_vectorize": True},
+                                           disabled_pass=["FuseOps"]):
+                logger.debug("building relay graph (no tuning records provided)")
+                graph_module = relay.build(mod, tvm_target, params=params)
+        else:
+            with tvm.transform.PassContext(opt_level=3):
+                logger.debug("building relay graph (no tuning records provided)")
+                graph_module = relay.build(mod, tvm_target, params=params)
 
     # Generate output dump files with sources
     dump_code = dump_code or []
@@ -222,7 +282,7 @@ def compile_model(
 
     # TODO we need to update this return to use the updated graph module APIs
     #      as these getter functions will be deprecated in the next release (@leandron)
-    return graph_module.get_json(), graph_module.get_lib(), graph_module.get_params(), dumps
+    return graph_module, dumps
 
 
 def save_module(module_path, graph, lib, params, cross=None):
