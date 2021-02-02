@@ -136,13 +136,17 @@ def drive_compile(args):
         save_dumps(args.output, dumps)
 
     if args.micro:
-        print("Skipping graph, lib, and params .tar since microTVM is used")
-        micro_sdk(args.sdk, args.board, gm, debug=True)
+        print("Skipping .tar with graph, lib, and params since microTVM is used.\n"
+              "Graph (.json) and input params (.params) files will be included\n"
+              "in runtime.tar tarball to be used later by 'tvmc run'")
+        tarball = micro_sdk(args.sdk, args.board, gm, debug=True)
+        save_runtime(tarball, gm.get_json(), gm.get_params())
     else:
         save_module(args.output, gm.get_json(), gm.get_lib(), gm.get_params(), args.cross_compiler)
     return 0
 
 AVAILABLE_SDKS=["zephyr", "none"]
+
 def micro_sdk(sdk, board, graph_module, debug=False):
     if sdk not in AVAILABLE_SDKS:
         raise "Invalid backend"
@@ -164,7 +168,7 @@ def micro_sdk(sdk, board, graph_module, debug=False):
                                                 bin_opts=compiler_opts['bin_opts'],
                                                 extra_libs=[os.path.join(tvm.micro.build.CRT_ROOT_DIR, "memory")],)
 #       print(type(binary))
-        binary.archive("./")
+        return binary.archive("./")
 
 def compile_model(
     path,
@@ -284,6 +288,24 @@ def compile_model(
     #      as these getter functions will be deprecated in the next release (@leandron)
     return graph_module, dumps
 
+def save_runtime(runtime_path, graph, params):
+    graph_filename = "mod.json"
+    params_filename = "mod.params"
+    temp = utils.tempdir()
+    graph_path = temp.relpath(graph_filename)
+    params_path = temp.relpath(params_filename)
+
+    with open(graph_path, "w") as graph_file:
+        graph_file.write(graph)
+
+    with open(params_path, "wb") as params_file:
+        params_file.write(relay.save_param_dict(params))
+
+    with tarfile.open(runtime_path, "a") as tar:
+        tar.add(graph_path, "runtime/"+graph_filename)
+        tar.add(params_path, "runtime/"+params_filename)
+
+    tar.close()
 
 def save_module(module_path, graph, lib, params, cross=None):
     """
