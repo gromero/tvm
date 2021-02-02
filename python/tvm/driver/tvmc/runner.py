@@ -22,6 +22,8 @@ import logging
 import os
 import tarfile
 import tempfile
+import shutil
+import sys
 
 import numpy as np
 import tvm
@@ -29,6 +31,8 @@ from tvm import rpc
 from tvm.autotvm.measure import request_remote
 from tvm.contrib import graph_runtime as runtime
 from tvm.contrib.debugger import debug_runtime
+from tvm.micro.micro_binary import MicroBinary
+from tvm.micro.contrib.zephyr import ZephyrFlasher
 
 from . import common
 from .common import TVMCException
@@ -50,7 +54,7 @@ def add_run_parser(subparsers):
     #      like 'webgpu', etc (@leandron)
     parser.add_argument(
         "--device",
-        choices=["cpu", "gpu", "cl"],
+        choices=["cpu", "gpu", "cl", "micro"],
         default="cpu",
         help="target device to run the compiled module. Defaults to 'cpu'",
     )
@@ -93,7 +97,7 @@ def add_run_parser(subparsers):
         help="hostname (required) and port (optional, defaults to 9090) of the RPC tracker, "
         "e.g. '192.168.0.100:9999'",
     )
-    parser.add_argument("FILE", help="path to the compiled module file")
+    parser.add_argument("FILE", help="path to the compiled module or runtime (--device=micro) .tar file")
 
 
 def drive_run(args):
@@ -105,19 +109,24 @@ def drive_run(args):
         Arguments from command line parser.
     """
 
-    rpc_hostname, rpc_port = common.tracker_host_port_from_cli(args.rpc_tracker)
+    if args.device == "micro":
+        print("Using microTVM")
+        run_runtime(args.FILE)
+        return
+    else:
+        rpc_hostname, rpc_port = common.tracker_host_port_from_cli(args.rpc_tracker)
 
-    outputs, times = run_module(
-        args.FILE,
-        rpc_hostname,
-        rpc_port,
-        args.rpc_key,
-        inputs_file=args.inputs,
-        device=args.device,
-        fill_mode=args.fill_mode,
-        repeat=args.repeat,
-        profile=args.profile,
-    )
+        outputs, times = run_module(
+            args.FILE,
+            rpc_hostname,
+            rpc_port,
+            args.rpc_key,
+            inputs_file=args.inputs,
+            device=args.device,
+            fill_mode=args.fill_mode,
+            repeat=args.repeat,
+            profile=args.profile,
+        )
 
     if args.print_time:
         stat_table = format_times(times)
@@ -284,6 +293,41 @@ def make_inputs_dict(inputs_file, shape_dict, dtype_dict, fill_mode):
             inputs_dict[input_name] = data
 
     return inputs_dict
+
+def run_runtime(runtime_file, fill_mode="random"):
+    temp_dir = "/tmp/tvmc_tmp"
+    if os.path.exists(temp_dir):
+        print(f"Cleaning temporary dir ({temp_dir})...")
+        shutil.rmtree(temp_dir)
+
+    print(f"Reading runtime details from '{runtime_file}'...")
+    micro_binary = MicroBinary.unarchive(archive_path=runtime_file, base_dir=temp_dir)
+    flasher = ZephyrFlasher(west_cmd=["west"], subprocess_env={})
+    transport = flasher.transport(micro_binary=micro_binary)
+    # print(transport)
+
+    graph = open(os.path.join(temp_dir, "mod.json")).read()
+
+    with tvm.micro.Session(binary=None, flasher=None, transport_context_manager=transport) as session:
+        # print(session.get_system_lib())
+        # print("session.context =", session.context)
+        module = tvm.micro.create_local_graph_runtime(graph, session.get_system_lib(), session.context)
+
+        params = bytearray(open(os.path.join(temp_dir, "mod.params"), "rb").read())
+        module.load_params(params)
+
+        shape_dict, dtype_dict = get_input_info(graph, params)
+        # FIXME: use inputs_file passed by the user on command line
+        # currently its hardcoded to an empty dict.
+        inputs_file = {}
+        inputs_dict = make_inputs_dict(inputs_file, shape_dict, dtype_dict, fill_mode="zeros")
+        module.set_input(**inputs_dict)
+
+        print("Input:", inputs_dict)
+        module.run()
+
+        micro_tvm_output = module.get_output(0).asnumpy()
+        print("Output: " + str(micro_tvm_output))
 
 
 def run_module(
