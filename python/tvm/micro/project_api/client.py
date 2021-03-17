@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -54,7 +55,8 @@ class ProjectAPIClient:
         }
         self.next_request_id += 1
 
-        json.dump(request, self.write_file)
+        request_str = json.dumps(request)
+        self.write_file.write(request_str)
         self.write_file.write('\n')
         if self.testonly_did_write_request:
             self.testonly_did_write_request()  # Allow test to assert on server processing.
@@ -88,6 +90,38 @@ class ProjectAPIClient:
 
     def build(self, options : dict = None):
         return self._request_reply("build", {"options": (options if options is not None else {})})
+
+    def flash(self, options : dict = None):
+        return self._request_reply("flash", {"options": (options if options is not None else {})})
+
+    def connect_transport(self, options : dict = None):
+        return self._request_reply("connect_transport", {"options": (options if options is not None else {})})
+
+    def disconnect_transport(self):
+        return self._request_reply("disconnect_transport", {})
+
+    def _maybe_raise_io_error(self, reply):
+        if 'error' not in reply:
+            return
+
+        if reply['error'] == 'io_timeout':
+            raise server.IoTimeoutError(reply['message'])
+        elif reply['error'] == 'transport_closed':
+            raise server.TransportClosedError(reply['message'])
+        else:
+            assert False, f"Unknown IO-type error {reply['error']}"
+
+    def read_transport(self, n, timeout_sec):
+        reply = self._request_reply("read_transport", {"n": n, "timeout_sec": timeout_sec})
+        self._maybe_raise_io_error(reply)
+        reply['data'] = base64.b85decode(reply['data'])
+        return reply
+
+    def write_transport(self, data, timeout_sec):
+        reply = self._request_reply("write_transport", {"data": str(base64.b85encode(data), 'utf-8'),
+                                                        "timeout_sec": timeout_sec})
+        self._maybe_raise_io_error(reply)
+        return reply
 
 
 # NOTE: windows support untested

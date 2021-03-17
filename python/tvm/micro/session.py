@@ -111,9 +111,6 @@ class Session:
         Session :
             Returns self.
         """
-        if self.flasher is not None:
-            self.transport_context_manager = self.flasher.flash(self.binary)
-
         self.transport = TransportLogger(
             self.session_name, self.transport_context_manager, level=logging.DEBUG
         ).__enter__()
