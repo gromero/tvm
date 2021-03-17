@@ -6,6 +6,7 @@ imports or dependencies outside of things strictly required to run the API serve
 
 import abc
 import argparse
+import base64
 import collections
 import enum
 import io
@@ -26,6 +27,45 @@ ProjectOption = collections.namedtuple('ProjectOption', ('name', 'help'))
 
 
 ServerInfo = collections.namedtuple('ServerInfo', ('platform_name', 'is_template', 'model_library_format_path', 'project_options'))
+
+
+
+class TransportClosedError(Exception):
+    """Raised when a transport can no longer be used due to underlying I/O problems."""
+
+
+class IoTimeoutError(Exception):
+    """Raised when the I/O operation could not be completed before the timeout.
+
+    Specifically:
+     - when no data could be read before the timeout
+     - when some of the write data could be written before the timeout
+
+    Note the asymmetric behavior of read() vs write(), since in one case the total length of the
+    data to transfer is known.
+    """
+
+
+# Timeouts supported by the underlying C++ MicroSession.
+#
+# session_start_retry_timeout_sec : float
+#     Number of seconds to wait for the device to send a kSessionStartReply after sending the
+#     initial session start message. After this time elapses another
+#     kSessionTerminated-kSessionStartInit train is sent. 0 disables this.
+# session_start_timeout_sec : float
+#     Total number of seconds to wait for the session to be established. After this time, the
+#     client gives up trying to establish a session and raises an exception.
+# session_established_timeout_sec : float
+#     Number of seconds to wait for a reply message after a session has been established. 0
+#     disables this.
+TransportTimeouts = collections.namedtuple(
+    "TransportTimeouts",
+    [
+        "session_start_retry_timeout_sec",
+        "session_start_timeout_sec",
+        "session_established_timeout_sec",
+    ],
+)
 
 
 class ErrorCode(enum.IntEnum):
@@ -97,7 +137,7 @@ class ProjectAPIHandler(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def connect_transport(self, options : dict):
+    def connect_transport(self, options : dict) -> TransportTimeouts:
         """Connect the transport layer, enabling write_transport and read_transport calls.
 
         Parameters
@@ -116,7 +156,7 @@ class ProjectAPIHandler(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def read_transport(self, n : int, timeout_sec : float) -> int:
+    def read_transport(self, n : int, timeout_sec : typing.Union[float, type(None)]) -> int:
         """Read data from the transport
 
         Parameters
@@ -133,9 +173,20 @@ class ProjectAPIHandler(metaclass=abc.ABCMeta):
 
         Returns
         -------
-        int :
-            The number of bytes written to the underlying channel. This can be less than the length
-            of `data`, but cannot be 0 (raise an exception instead).
+        bytes :
+            Data read from the channel. Less than `n` bytes may be returned, but 0 bytes should
+            never be returned. If returning less than `n` bytes, the full timeout_sec, plus any
+            internally-added timeout, should be waited. If a timeout or transport error occurs,
+            an exception should be raised rather than simply returning empty bytes.
+
+        Raises
+        ------
+        TransportClosedError :
+            When the transport layer determines that the transport can no longer send or receive
+            data due to an underlying I/O problem (i.e. file descriptor closed, cable removed, etc).
+
+        IoTimeoutError :
+            When `timeout_sec` elapses without receiving any data.
         """
         raise NotImplementedError()
 
@@ -160,6 +211,15 @@ class ProjectAPIHandler(metaclass=abc.ABCMeta):
         int :
             The number of bytes written to the underlying channel. This can be less than the length
             of `data`, but cannot be 0 (raise an exception instead).
+
+        Raises
+        ------
+        TransportClosedError :
+            When the transport layer determines that the transport can no longer send or receive
+            data due to an underlying I/O problem (i.e. file descriptor closed, cable removed, etc).
+
+        IoTimeoutError :
+            When `timeout_sec` elapses without receiving any data.
         """
         raise NotImplementedError()
 
@@ -216,9 +276,8 @@ class ProjectAPIServer:
             True when more data could be read from read_file, False otherwise.
         """
         try:
-            _LOG.info('readline')
             line = self._read_file.readline()
-            _LOG.info('read %s', line)
+            _LOG.debug('read request <- %s', line)
             if not line:
                 return False
 
@@ -236,14 +295,12 @@ class ProjectAPIServer:
             self._validate_request(request)
         except ValidationError as exc:
             request_id = None if not isinstance(request, dict) else request.get('id')
-            _LOG.info('validation error', exc_info=True)
             self._reply_error(request_id, traceback.TracebackException.from_exception(exc))
             return False
 
         try:
             self._dispatch_request(request)
         except Exception as exc:
-            _LOG.info('validation error', exc_info=True)
             self._reply_error(request["id"], traceback.TracebackException.from_exception(exc))
             return True
 
@@ -288,13 +345,15 @@ class ProjectAPIServer:
             raise JSONRPCError(
                 ErrorCode.METHOD_NOT_FOUND, f'{request["method"]}: no such method', None)
 
+        has_preprocessing = True
         dispatch_method = getattr(self, f'_dispatch_{method}', None)
         if dispatch_method is None:
             dispatch_method = getattr(self._handler, method)
+            has_preprocessing = False
 
         request_params = request['params']
         params = {}
-        _LOG.info('params %r', request_params.keys())
+
         for var_name, var_type in typing.get_type_hints(interface_method).items():
             if var_name == 'self' or var_name == 'return':
                 continue
@@ -304,10 +363,10 @@ class ProjectAPIServer:
                 raise JSONRPCError(ErrorCode.INVALID_PARAMS, f'method {request["method"]}: parameter {var_name} not given', None)
 
             param = request_params[var_name]
-            if not isinstance(param, var_type):
+            if not has_preprocessing and not isinstance(param, var_type):
                 raise JSONRPCError(
-                    ErrorCode.INVALID_PARAM,
-                    f'method {request["method"]}: parameter {var_name}: want {var_type!r}, got {param!r}', None)
+                    ErrorCode.INVALID_PARAMS,
+                    f'method {request["method"]}: parameter {var_name}: want {var_type!r}, got {type(param)!r}', None)
 
             params[var_name] = param
 
@@ -318,7 +377,6 @@ class ProjectAPIServer:
                                None)
 
         try:
-            _LOG.info('dispatch %r', params)
             return_value = dispatch_method(**params)
         except Exception as exc:
             self._reply_error(request['id'], traceback.TracebackException.from_exception(exc))
@@ -339,21 +397,43 @@ class ProjectAPIServer:
             reply_dict["result"] = result
 
 
-        _LOG.info('write reply %r', reply_dict)
-        json.dump(reply_dict, self._write_file)
+        reply_str = json.dumps(reply_dict)
+        _LOG.debug('write reply -> %r', reply_dict)
+        self._write_file.write(reply_str)
         self._write_file.write('\n')
 
     def _reply_error(self, request_id, exception):
         self._write_reply(request_id, error='\n'.join(exception.format()))
 
     def _dispatch_server_info_query(self):
-        _LOG.info("siq %r", self._handler)
         query_reply = self._handler.server_info_query()
         to_return = query_reply._asdict()
         to_return["protocol_version"] = self._PROTOCOL_VERSION
         to_return["project_options"] = [o._asdict() for o in query_reply.project_options]
         return to_return
 
+    def _dispatch_connect_transport(self, options):
+        reply = self._handler.connect_transport(options)
+        return {"timeouts": reply._asdict()}
+
+    def _wrap_io_call(self, call):
+        try:
+            return call()
+        except IoTimeoutError as exc:
+            return {'error': {'name': 'io_timeout', 'message': str(exc)}}
+        except TransportClosedError as exc:
+            return {'error': {'name': 'transport_closed', 'message': str(exc)}}
+
+    def _dispatch_write_transport(self, data, timeout_sec):
+        return self._wrap_io_call(lambda: self._handler.write_transport(base64.b85decode(data), timeout_sec))
+
+    def _dispatch_read_transport(self, n, timeout_sec):
+        def _do_read():
+            reply = self._handler.read_transport(n, timeout_sec)
+            reply['data'] = str(base64.b85encode(reply['data']), 'utf-8')
+            return reply
+
+        return self._wrap_io_call(_do_read)
 
 def main(handler : ProjectAPIHandler, argv : typing.List[str] = None):
     """Start a Project API server.
