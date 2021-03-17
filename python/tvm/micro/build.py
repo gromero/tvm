@@ -27,7 +27,6 @@ from tvm.contrib import utils
 from .._ffi import libinfo
 from .micro_library import MicroLibrary
 from . import model_library_format
-from . import project_api_client
 
 
 _LOG = logging.getLogger(__name__)
@@ -269,18 +268,3 @@ def build_static_runtime(
     runtime_build_dir = workspace.relpath(f"build/runtime")
     os.makedirs(runtime_build_dir)
     return compiler.binary(runtime_build_dir, libs, compiler_options["bin_opts"])
-
-
-def generate_project(template_project_dir, graph_runtime_factory, project_dir):
-    template_client = project_api_client.instantiate_from_dir(template_project_dir)
-
-    model_library_format_path = utils.tempdir().relpath('model.tar')
-    model_libary_format.export_model_library_format(
-        graph_runtime_factory, model_library_format_path)
-
-    template_client.generate_project(
-        model_library_format_path=model_library_format_path,
-        crt_path=get_standalone_crt_dir(),
-        project_dir=project_dir)
-
-    project_client = project_api_client.instantiate_from_dir(project_dir)

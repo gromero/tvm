@@ -72,7 +72,8 @@ LIBS = \
 	src/runtime/crt/graph_executor_module \
 	src/runtime/crt/memory \
 	src/runtime/crt/microtvm_rpc_common \
-	src/runtime/crt/microtvm_rpc_server
+	src/runtime/crt/microtvm_rpc_server \
+	$(EXTRA_LIBS)
 
 $(foreach lib,$(LIBS),$(eval $(call LIB_template,$(lib))))
 
