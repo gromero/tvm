@@ -51,23 +51,11 @@ def _make_sess_from_op(workspace, op_name, sched, arg_bufs):
 
 
 def _make_session(workspace, mod):
-    compiler = tvm.micro.DefaultCompiler(target=TARGET)
-    opts = tvm.micro.default_options(
-        os.path.join(tvm.micro.get_standalone_crt_dir(), "template", "host")
-    )
-    micro_binary = tvm.micro.build_static_runtime(
-        workspace,
-        compiler,
-        mod,
-        opts,
-        extra_libs=[tvm.micro.get_standalone_crt_lib("memory")],
-    )
-
-    flasher_kw = {
-        "debug": DEBUG,
-    }
-    flasher = compiler.flasher(**flasher_kw)
-    return tvm.micro.Session(binary=micro_binary, flasher=flasher)
+    template_project_dir = os.path.join(tvm.micro.get_standalone_crt_dir(), "template", "host")
+    project = tvm.micro.generate_project(template_project_dir, mod, workspace.relpath("project"), {"verbose": 1})
+    project.build()
+    project.flash()
+    return tvm.micro.Session(project.transport())
 
 
 def _make_add_sess(workspace):
