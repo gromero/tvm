@@ -1,12 +1,15 @@
 import base64
 import io
 import json
+import logging
 import os
 import subprocess
 import sys
 import typing
 
 from . import server
+
+_LOG = logging.getLogger(__name__)
 
 
 class ProjectAPIErrorBase(Exception):
@@ -57,10 +60,12 @@ class ProjectAPIClient:
 
         request_str = json.dumps(request)
         self.write_file.write(request_str)
+        _LOG.debug("send -> %s", request_str)
         self.write_file.write('\n')
         if self.testonly_did_write_request:
             self.testonly_did_write_request()  # Allow test to assert on server processing.
         reply_line = self.read_file.readline()
+        _LOG.debug("recv <- %s", reply_line)
         reply = json.loads(reply_line)
 
         if reply.get("jsonrpc") != "2.0":
