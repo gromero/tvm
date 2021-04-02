@@ -301,34 +301,6 @@ class ZephyrCompiler(tvm.micro.Compiler):
         )
 
 
-CACHE_ENTRY_RE = re.compile(r"(?P<name>[^:]+):(?P<type>[^=]+)=(?P<value>.*)")
-
-
-CMAKE_BOOL_MAP = dict(
-    [(k, True) for k in ("1", "ON", "YES", "TRUE", "Y")]
-    + [(k, False) for k in ("0", "OFF", "NO", "FALSE", "N", "IGNORE", "NOTFOUND", "")]
-)
-
-
-def read_cmake_cache(file_name):
-    """Read a CMakeCache.txt-like file and return a dictionary of values."""
-    entries = collections.OrderedDict()
-    with open(file_name, encoding="utf-8") as f:
-        for line in f:
-            m = CACHE_ENTRY_RE.match(line.rstrip("\n"))
-            if not m:
-                continue
-
-            if m.group("type") == "BOOL":
-                value = CMAKE_BOOL_MAP[m.group("value").upper()]
-            else:
-                value = m.group("value")
-
-            entries[m.group("name")] = value
-
-    return entries
-
-
 class BoardError(Exception):
     """Raised when an attached board cannot be opened (i.e. missing /dev nodes, etc)."""
 
@@ -404,35 +376,6 @@ class ZephyrFlasher(tvm.micro.compiler.Flasher):
 
         return ["--snr", boards[0]]
 
-    # kwargs passed to usb.core.find to find attached boards for the openocd flash runner.
-    BOARD_USB_FIND_KW = {
-        "nucleo_f746zg": {"idVendor": 0x0483, "idProduct": 0x374B},
-        "stm32f746g_disco": {"idVendor": 0x0483, "idProduct": 0x374B},
-    }
-
-    def openocd_serial(self, cmake_entries):
-        """Find the serial port to use for a board with OpenOCD flash strategy."""
-        if self._openocd_serial is not None:
-            return self._openocd_serial
-
-        if self._autodetected_openocd_serial is None:
-            import usb  # pylint: disable=import-outside-toplevel
-
-            find_kw = self.BOARD_USB_FIND_KW[cmake_entries["BOARD"]]
-            boards = usb.core.find(find_all=True, **find_kw)
-            serials = []
-            for b in boards:
-                serials.append(b.serial_number)
-
-            if len(serials) == 0:
-                raise BoardAutodetectFailed(f"No attached USB devices matching: {find_kw!r}")
-            serials.sort()
-
-            self._autodetected_openocd_serial = serials[0]
-            _LOG.debug("zephyr openocd driver: autodetected serial %s", serials[0])
-
-        return self._autodetected_openocd_serial
-
     def _get_openocd_device_args(self, cmake_entries):
         return ["--serial", self.openocd_serial(cmake_entries)]
 
@@ -473,107 +416,6 @@ class ZephyrFlasher(tvm.micro.compiler.Flasher):
 
         return ZephyrQemuTransport(
             micro_binary.base_dir, startup_timeout_sec=30.0, qemu_debugger=qemu_debugger
-        )
-
-    def flash(self, micro_binary):
-        if self._qemu:
-            return self._zephyr_transport(micro_binary)
-
-        cmake_cache_path = micro_binary.abspath(micro_binary.labelled_files["cmake_cache"][0])
-        cmake_entries = read_cmake_cache(cmake_cache_path)
-
-        build_dir = os.path.dirname(cmake_cache_path)
-
-        # The nRF5340DK requires an additional `nrfjprog --recover` before each flash cycle.
-        # This is because readback protection is enabled by default when this device is flashed.
-        # Otherwise, flashing may fail with an error such as the following:
-        #  ERROR: The operation attempted is unavailable due to readback protection in
-        #  ERROR: your device. Please use --recover to unlock the device.
-        if (
-            self._board.startswith("nrf5340dk")
-            and self._get_flash_runner(cmake_entries) == "nrfjprog"
-        ):
-            recover_args = ["nrfjprog", "--recover"]
-            recover_args.extend(self._get_nrf_device_args())
-            self._subprocess_env.run(recover_args, cwd=build_dir)
-
-        west_args = (
-            self._west_cmd
-            + ["flash", "--build-dir", build_dir, "--skip-rebuild"]
-            + self._get_device_args(cmake_entries)
-        )
-        if self._flash_args is not None:
-            west_args.extend(self._flash_args)
-        self._subprocess_env.run(west_args, cwd=build_dir)
-
-        return self.transport(micro_binary)
-
-    def _find_nrf_serial_port(self, cmake_entries):
-        com_ports = subprocess.check_output(
-            ["nrfjprog", "--com"] + self._get_device_args(cmake_entries), encoding="utf-8"
-        )
-        ports_by_vcom = {}
-        for line in com_ports.split("\n")[:-1]:
-            parts = line.split()
-            ports_by_vcom[parts[2]] = parts[1]
-
-        return {"port_path": ports_by_vcom["VCOM2"]}
-
-    def _find_openocd_serial_port(self, cmake_entries):
-        return {"grep": self.openocd_serial(cmake_entries)}
-
-    def _find_serial_port(self, micro_binary):
-        cmake_entries = read_cmake_cache(
-            micro_binary.abspath(micro_binary.labelled_files["cmake_cache"][0])
-        )
-        flash_runner = self._get_flash_runner(cmake_entries)
-
-        if flash_runner == "nrfjprog":
-            return self._find_nrf_serial_port(cmake_entries)
-
-        if flash_runner == "openocd":
-            return self._find_openocd_serial_port(cmake_entries)
-
-        raise FlashRunnerNotSupported(
-            f"Don't know how to deduce serial port for flash runner {flash_runner}"
-        )
-
-    def transport(self, micro_binary):
-        """Instantiate the transport for use with non-QEMU Zephyr."""
-        dt_inst = self._dtlib.DT(
-            micro_binary.abspath(micro_binary.labelled_files["device_tree"][0])
-        )
-        uart_baud = (
-            dt_inst.get_node("/chosen")
-            .props["zephyr,console"]
-            .to_path()
-            .props["current-speed"]
-            .to_num()
-        )
-        _LOG.debug("zephyr transport: found UART baudrate from devicetree: %d", uart_baud)
-
-        port_kwargs = self._find_serial_port(micro_binary)
-        serial_transport = serial.SerialTransport(
-            timeouts=self._serial_timeouts, baudrate=uart_baud, **port_kwargs
-        )
-        if self._debug_rpc_session is None:
-            return serial_transport
-
-        return debug.DebugWrapperTransport(
-            debugger.RpcDebugger(
-                self._debug_rpc_session,
-                debugger.DebuggerFactory(
-                    ZephyrDebugger,
-                    (
-                        " ".join(shlex.quote(x) for x in self._west_cmd),
-                        os.path.dirname(micro_binary.abspath(micro_binary.label("cmake_cache")[0])),
-                        micro_binary.abspath(micro_binary.debug_files[0]),
-                        self._zephyr_base,
-                    ),
-                    {},
-                ),
-            ),
-            serial_transport,
         )
 
 
