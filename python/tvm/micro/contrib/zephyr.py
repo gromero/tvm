@@ -106,7 +106,19 @@ class ZephyrCompiler(tvm.micro.Compiler):
                 f"project_dir supplied to ZephyrCompiler does not exist: {project_dir}"
             )
 
-        self._board = board
+        if "qemu" in board:
+            self._qemu = True
+
+            # For Zephyr boards that run emulated by default, i.e. "simulation: qemu" is set in
+            # the board's .yaml config file, and which their names don't have the prefix "qemu_", a
+            # suffix "-qemu" is used in microTVM to inform that the QEMU transporter has to be used.
+            # So the suffix needs to be trimmed off before the board name is passed to Zephyr.
+            if "-qemu" in board:
+                self._board = board.replace("-qemu", "")
+            # No need to trimmed off the prefix because it's really part of the board name.
+            else:
+                self._board = board
+
         if west_cmd is None:
             self._west_cmd = [sys.executable, "-mwest.app.main"]
         elif isinstance(west_cmd, str):
@@ -255,14 +267,14 @@ class ZephyrCompiler(tvm.micro.Compiler):
                 "cmake_cache": ["CMakeCache.txt"],
                 "device_tree": [os.path.join("zephyr", "zephyr.dts")],
             },
-            immobile="qemu" in self._board,
+            immobile = True if self._qemu else False
         )
 
     @property
     def flasher_factory(self):
         return compiler.FlasherFactory(
             ZephyrFlasher,
-            (self._board,),
+            (self._board, self._qemu,),
             dict(
                 zephyr_base=self._zephyr_base,
                 project_dir=self._project_dir,
@@ -314,6 +326,7 @@ class ZephyrFlasher(tvm.micro.compiler.Flasher):
     def __init__(
         self,
         board,
+        qemu,
         zephyr_base=None,
         project_dir=None,
         subprocess_env=None,
@@ -334,6 +347,7 @@ class ZephyrFlasher(tvm.micro.compiler.Flasher):
             sys.path.pop(0)
 
         self._board = board
+        self._qemu = qemu
         self._zephyr_base = zephyr_base
         self._project_dir = project_dir
         self._west_cmd = west_cmd
@@ -429,10 +443,7 @@ class ZephyrFlasher(tvm.micro.compiler.Flasher):
         )
 
     def flash(self, micro_binary):
-        cmake_entries = read_cmake_cache(
-            micro_binary.abspath(micro_binary.labelled_files["cmake_cache"][0])
-        )
-        if "qemu" in cmake_entries["BOARD"]:
+        if self._qemu:
             return ZephyrQemuTransport(micro_binary.base_dir, startup_timeout_sec=30.0)
 
         build_dir = os.path.dirname(
