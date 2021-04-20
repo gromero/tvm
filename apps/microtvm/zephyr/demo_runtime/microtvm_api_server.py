@@ -153,20 +153,30 @@ class Handler(server.ProjectAPIHandler):
         check_call(args)
 
     def flash(self, options):
+        zephyr_board = options["zephyr_board"]
+        self._qemu = "qemu" in zephyr_board
+
+        # For Zephyr boards that run emulated by default but don't have the prefix "qemu_" in their
+        # board names, a suffix "-qemu" is added by users of µTVM when specifying the board name to
+        # inform that the QEMU transporter must be used just like for the boards with the prefix.
+        # Zephyr does not recognize the suffix, so we trim it off before passing it.
+        if "-qemu" in zephyr_board:
+            zephyr_board = zephyr_board.replace("-qemu", "")
+
         # The nRF5340DK requires an additional `nrfjprog --recover` before each flash cycle.
         # This is because readback protection is enabled by default when this device is flashed.
         # Otherwise, flashing may fail with an error such as the following:
         #  ERROR: The operation attempted is unavailable due to readback protection in
         #  ERROR: your device. Please use --recover to unlock the device.
         if (
-            self._board.startswith("nrf5340dk")
+            zephyr_board.startswith("nrf5340dk")
             and self._get_flash_runner(cmake_entries) == "nrfjprog"
         ):
             recover_args = ["nrfjprog", "--recover"]
             recover_args.extend(self._get_nrf_device_args())
             self._subprocess_env.run(recover_args, cwd=build_dir)
 
-        check_call(["make", "flash"], cwd=API_SERVER_DIR)
+        check_call(["make", "flash"], cwd=API_SERVER_DIR / "build")
 
     def _set_nonblock(self, fd):
         flag = fcntl.fcntl(fd, fcntl.F_GETFL)
@@ -360,26 +370,6 @@ class Handler(server.ProjectAPIHandler):
             f"Don't know how to find serial terminal for board {cmake_entries['BOARD']} with flash "
             f"runner {flash_runner}"
         )
-
-    def flash(self, options):
-        cmake_entries = read_cmake_cache()
-        if "qemu" in cmake_entries["BOARD"]:
-            return ZephyrQemuTransport(startup_timeout_sec=30.0)
-
-        build_dir = os.path.dirname(
-            micro_binary.abspath(micro_binary.labelled_files["cmake_cache"][0])
-        )
-
-        west_args = (
-            self._west_cmd
-            + ["flash", "--build-dir", build_dir, "--skip-rebuild"]
-            + self._get_device_args(cmake_entries)
-        )
-        if self._flash_args is not None:
-            west_args.extend(self._flash_args)
-        self._subprocess_env.run(west_args, cwd=build_dir)
-
-        return self.transport(micro_binary)
 
 
 class QemuStartupFailureError(Exception):
