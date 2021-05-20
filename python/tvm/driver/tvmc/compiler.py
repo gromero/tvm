@@ -57,7 +57,7 @@ def add_compile_parser(subparsers):
         "--dump-code",
         metavar="FORMAT",
         default="",
-        help="comma separated list of possible formats to export the input model, e.g. 'asm,ll,relay'.",
+        help="comma separated list of formats to export the input model, e.g. 'asm,ll,relay'.",
     )
     parser.add_argument(
         "--model-format",
@@ -69,7 +69,8 @@ def add_compile_parser(subparsers):
         "--output-format",
         choices=["so", "mlf"],
         default="so",
-        help="output format. Use 'so' for shared object or 'mlf' for Model Library Format (only for µTVM targets).",
+        help="output format. Use 'so' for shared object or 'mlf' for Model Library Format "
+        "(only for µTVM targets).",
     )
     parser.add_argument(
         "-o",

@@ -183,7 +183,7 @@ class TVMCModel(object):
         cross: Optional[Union[str, Callable]] = None,
         lib_format: str = "so",
     ):
-        """Export modules function library using the classic format: an archive containing the mod.{[so,tar],json,params} files.
+        """Export modules function library using the classic format.
         Parameters
         ----------
         executor_factory : GraphExecutorFactoryModule
@@ -265,9 +265,13 @@ class TVMCModel(object):
             raise TVMCException("Specifying the MLF output and a cross compiler is not supported.")
 
         if output_format in ["so", "tar"]:
-            return self.export_classic_format(executor_factory, package_path, cross, output_format)
-        else:
-            return export_model_library_format(executor_factory, package_path)
+            package_path = self.export_classic_format(
+                executor_factory, package_path, cross, output_format
+            )
+        elif output_format == "mlf":
+            package_path = export_model_library_format(executor_factory, package_path)
+
+        return package_path
 
     def summary(self, file: TextIO = None):
         """Print the IR corressponding to this model.
