@@ -176,7 +176,8 @@ class TVMCModel(object):
         """
         return self._tmp_dir.relpath("model_package.tar")
 
-    def export_classic_format(self,
+    def export_classic_format(
+        self,
         executor_factory: GraphExecutorFactoryModule,
         package_path: Optional[str] = None,
         cross: Optional[Union[str, Callable]] = None,

@@ -65,11 +65,11 @@ def add_compile_parser(subparsers):
         help="specify input model format.",
     )
     parser.add_argument(
-	"-f",
-	"--output-format",
-	choices=["so", "mlf"],
-	default="so",
-	help="output format. Use 'so' for shared object or 'mlf' for Model Library Format (only for µTVM targets)."
+        "-f",
+        "--output-format",
+        choices=["so", "mlf"],
+        default="so",
+        help="output format. Use 'so' for shared object or 'mlf' for Model Library Format (only for µTVM targets).",
     )
     parser.add_argument(
         "-o",
@@ -133,7 +133,7 @@ def drive_compile(args):
         tuning_records=args.tuning_records,
         package_path=args.output,
         cross=args.cross_compiler,
-        output_format = args.output_format,
+        output_format=args.output_format,
         dump_code=dump_code,
         target_host=None,
         desired_layout=args.desired_layout,
@@ -266,6 +266,7 @@ def compile_model(
     if dumps:
         save_dumps(package_path, dumps)
     return TVMCPackage(package_path)
+
 
 def save_dumps(module_name: str, dumps: Dict[str, str], dump_root: str = "."):
     """
