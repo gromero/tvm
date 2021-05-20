@@ -70,7 +70,7 @@ def add_compile_parser(subparsers):
         choices=["so", "mlf"],
         default="so",
         help="output format. Use 'so' for shared object or 'mlf' for Model Library Format "
-        "(only for µTVM targets).",
+        "(only for µTVM targets). Defaults to 'so'.",
     )
     parser.add_argument(
         "-o",
