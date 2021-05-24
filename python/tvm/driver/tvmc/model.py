@@ -245,6 +245,7 @@ class TVMCModel(object):
         executor_factory: GraphExecutorFactoryModule,
         package_path: Optional[str] = None,
         cross: Optional[Union[str, Callable]] = None,
+        cross_options: Optional[str] = None,
         output_format: str = "so",
     ):
         """Save this TVMCModel to file.
@@ -257,6 +258,8 @@ class TVMCModel(object):
             If not provided, the package will be saved to a generically named file in tmp.
         cross : str or callable object, optional
             Function that performs the actual compilation.
+        cross_options : str, optional
+            Command line options to be passed to the cross compiler.
         output_format : str
             How to save the modules function library. Must be one of "so" and "tar" to save
             using the classic format or "mlf" to save using the Model Library Format.
@@ -274,7 +277,7 @@ class TVMCModel(object):
 
         if output_format in ["so", "tar"]:
             package_path = self.export_classic_format(
-                executor_factory, package_path, cross, output_format
+                executor_factory, package_path, cross, cross_options, output_format
             )
         elif output_format == "mlf":
             package_path = export_model_library_format(executor_factory, package_path)
