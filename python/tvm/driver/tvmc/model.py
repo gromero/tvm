@@ -312,7 +312,7 @@ class TVMCPackage(object):
 
         if os.path.exists(temp.relpath("metadata.json")):
             # Model Library Format (MLF)
-            self.name = None
+            self.lib_name = None
             self.lib_path = None
 
             graph = temp.relpath("runtime-config/graph/graph.json")
