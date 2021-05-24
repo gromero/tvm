@@ -271,7 +271,11 @@ def compile_model(
 
     # Create a new tvmc model package object from the graph definition.
     package_path = tvmc_model.export_package(
-        graph_module, package_path, cross, cross_options, output_format,
+        graph_module,
+        package_path,
+        cross,
+        cross_options,
+        output_format,
     )
 
     # Write dumps to file.

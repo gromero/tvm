@@ -40,13 +40,12 @@ def test_tvmc_cl_compile_run_mlf(tflite_mobilenet_v1_1_quant, tmpdir_factory):
     assert os.path.exists(output_file), "Could not find the exported MLF archive."
 
     # Run the MLF archive. It must fail since it's only supported on micro targets.
-    tvmc_cmd = (
-        f"tvmc run {output_file}"
-    )
+    tvmc_cmd = f"tvmc run {output_file}"
     tvmc_args = tvmc_cmd.split(" ")[1:]
     exit_code = _main(tvmc_args)
     on_error = "Trying to run a MLF archive must fail because it's only supported on micro targets."
     assert exit_code != 0, on_error
+
 
 def test_tvmc_export_package_mlf(tflite_mobilenet_v1_1_quant, tmpdir_factory):
     pytest.importorskip("tflite")
@@ -54,7 +53,7 @@ def test_tvmc_export_package_mlf(tflite_mobilenet_v1_1_quant, tmpdir_factory):
     tvmc_model = tvmc.frontends.load_model(tflite_mobilenet_v1_1_quant)
     mod, params = tvmc_model.mod, tvmc_model.params
 
-    graph_module = tvm.relay.build(mod, target='llvm', params=params)
+    graph_module = tvm.relay.build(mod, target="llvm", params=params)
 
     output_dir = tmpdir_factory.mktemp("mlf")
     output_file = os.path.join(output_dir, "mock.tar")
@@ -64,7 +63,7 @@ def test_tvmc_export_package_mlf(tflite_mobilenet_v1_1_quant, tmpdir_factory):
         executor_factory=graph_module,
         package_path=output_file,
         cross=None,
-        output_format='mlf',
+        output_format="mlf",
     )
     assert os.path.exists(output_file), "Could not find the exported MLF archive."
 
@@ -75,12 +74,13 @@ def test_tvmc_export_package_mlf(tflite_mobilenet_v1_1_quant, tmpdir_factory):
         tvmc_model.export_package(
             executor_factory=graph_module,
             package_path=output_file,
-            cross='cc',
-            output_format='mlf',
+            cross="cc",
+            output_format="mlf",
         )
     expected_reason = "Specifying the MLF output and a cross compiler is not supported."
     on_error = "A TVMCException was caught but its reason is not the expected one."
     assert str(exp.value) == expected_reason, on_error
+
 
 def test_tvmc_import_package_mlf(tflite_compiled_model_mlf):
     # Compile and export a model to a MLF archive so it can be imported.
