@@ -214,5 +214,4 @@ def test_platform_timer():
 
 
 if __name__ == "__main__":
-    test_graph_executor()
-#     sys.exit(pytest.main([__file__] + sys.argv[1:]))
+     sys.exit(pytest.main([__file__] + sys.argv[1:]))
