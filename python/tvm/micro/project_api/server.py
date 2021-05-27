@@ -92,7 +92,7 @@ class JSONRPCError(Exception):
 class ServerError(JSONRPCError):
 
     @classmethod
-    def from_exception(self, exc, **kw):
+    def from_exception(cls, exc, **kw):
         to_return = cls(**kw)
         to_return.set_traceback(traceback.TracebackException.from_exception(exc).format())
         return to_return
@@ -139,7 +139,7 @@ class ServerError(JSONRPCError):
             if sub_cls.__name__ == json_error["message"]:
                 return sub_cls(message=json_error["message"], data=json_error.get("data"), client_context=client_context)
 
-        return cls(ErrorCode.SERVER_ERROR, json_error["message"], data=json_error.get("data"), client_context=client_context)
+        return cls(json_error["message"], data=json_error.get("data"), client_context=client_context)
 
 
 class TransportClosedError(ServerError):
