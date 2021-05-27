@@ -16,6 +16,10 @@ class ProjectAPIErrorBase(Exception):
     """Base class for all Project API errors."""
 
 
+class ConnectionShutdownError(ProjectAPIErrorBase):
+    """Raised when a request is made but the connection has been closed."""
+
+
 class MalformedReplyError(ProjectAPIErrorBase):
     """Raised when the server responds with an invalid reply."""
 
@@ -28,7 +32,7 @@ class ProjectAPIServerNotFoundError(ProjectAPIErrorBase):
     """Raised when the Project API server can't be found in the repo."""
 
 
-class ServerError(ProjectAPIErrorBase):
+class RPCError(ProjectAPIErrorBase):
 
     def __init__(self, request, error):
         self.request = request
@@ -49,7 +53,21 @@ class ProjectAPIClient:
         self.testonly_did_write_request = testonly_did_write_request
         self.next_request_id = 1
 
+    @property
+    def is_shutdown(self):
+        return self.read_file is None
+
+    def shutdown(self):
+        if self.is_shutdown:
+            return
+
+        self.read_file.close()
+        self.write_file.close()
+
     def _request_reply(self, method, params):
+        if self.is_shutdown:
+            raise ConnectionShutdownError()
+
         request = {
             "jsonrpc": "2.0",
             "method": method,
@@ -66,6 +84,10 @@ class ProjectAPIClient:
             self.testonly_did_write_request()  # Allow test to assert on server processing.
         reply_line = self.read_file.readline()
         _LOG.debug("recv <- %s", reply_line)
+        if not reply_line:
+            self.shutdown()
+            raise MalformedReplyError()
+
         reply = json.loads(reply_line)
 
         if reply.get("jsonrpc") != "2.0":
@@ -78,7 +100,7 @@ class ProjectAPIClient:
                 f"Reply id ({reply['id']}) does not equal request id ({request['id']}")
 
         if "error" in reply:
-            raise ServerError(request, reply["error"])
+            raise server.ServerError.from_json(f"calling method {method}", reply["error"])
         elif "result" not in reply:
             raise MalformedReplyError(f"Expected 'result' key in server reply, got {reply!r}")
 
@@ -105,28 +127,14 @@ class ProjectAPIClient:
     def disconnect_transport(self):
         return self._request_reply("disconnect_transport", {})
 
-    def _maybe_raise_io_error(self, reply):
-        if 'error' not in reply:
-            return
-
-        if reply['error'] == 'io_timeout':
-            raise server.IoTimeoutError(reply['message'])
-        elif reply['error'] == 'transport_closed':
-            raise server.TransportClosedError(reply['message'])
-        else:
-            assert False, f"Unknown IO-type error {reply['error']}"
-
     def read_transport(self, n, timeout_sec):
         reply = self._request_reply("read_transport", {"n": n, "timeout_sec": timeout_sec})
-        self._maybe_raise_io_error(reply)
         reply['data'] = base64.b85decode(reply['data'])
         return reply
 
     def write_transport(self, data, timeout_sec):
-        reply = self._request_reply("write_transport", {"data": str(base64.b85encode(data), 'utf-8'),
-                                                        "timeout_sec": timeout_sec})
-        self._maybe_raise_io_error(reply)
-        return reply
+        return self._request_reply("write_transport", {"data": str(base64.b85encode(data), 'utf-8'),
+                                                       "timeout_sec": timeout_sec})
 
 
 # NOTE: windows support untested

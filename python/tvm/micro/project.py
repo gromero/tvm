@@ -23,7 +23,8 @@ class ProjectTransport(Transport):
         self._timeouts = TransportTimeouts(**reply["timeouts"])
 
     def close(self):
-        self._client.disconnect_transport()
+        if not self._client.shutdown:
+            self._client.disconnect_transport()
 
     def write(self, data, timeout_sec):
         return self._client.write_transport(data, timeout_sec)["bytes_written"]
@@ -77,12 +78,12 @@ class TemplateProject:
         if not self._info['is_template']:
             raise NotATemplateProjectError()
 
-    def generate_project(self, graph_runtime_factory, project_dir):
+    def generate_project(self, graph_executor_factory, project_dir):
         """Generate a project given GraphRuntimeFactory."""
         model_library_dir = utils.tempdir()
         model_library_format_path = model_library_dir.relpath('model.tar')
         export_model_library_format(
-            graph_runtime_factory, model_library_format_path)
+            graph_executor_factory, model_library_format_path)
 
         self._client.generate_project(
             model_library_format_path=model_library_format_path,
@@ -92,6 +93,6 @@ class TemplateProject:
         return GeneratedProject.from_directory(project_dir, self._options)
 
 
-def generate_project(template_project_dir : str, graph_runtime_factory, project_dir : str, options : dict = None):
+def generate_project(template_project_dir : str, graph_executor_factory, project_dir : str, options : dict = None):
     template = TemplateProject.from_directory(template_project_dir, options)
-    return template.generate_project(graph_runtime_factory, project_dir)
+    return template.generate_project(graph_executor_factory, project_dir)

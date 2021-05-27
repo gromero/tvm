@@ -1,6 +1,7 @@
 import fcntl
 import os
 import os.path
+import pathlib
 import select
 import shutil
 import subprocess
@@ -9,7 +10,7 @@ import time
 from tvm.micro.project_api import server
 
 
-PROJECT_DIR = os.path.dirname(__file__) or os.path.getcwd()
+PROJECT_DIR = pathlib.Path(os.path.dirname(__file__) or os.path.getcwd())
 
 
 MODEL_LIBRARY_FORMAT_RELPATH = "model.tar"
@@ -30,7 +31,7 @@ class Handler(server.ProjectAPIHandler):
         return server.ServerInfo(
             platform_name="host",
             is_template=IS_TEMPLATE,
-            model_library_format_path="" if IS_TEMPLATE else os.path.join(PROJECT_DIR, MODEL_LIBRARY_FORMAT_RELPATH),
+            model_library_format_path="" if IS_TEMPLATE else PROJECT_DIR / MODEL_LIBRARY_FORMAT_RELPATH,
             project_options=[server.ProjectOption("verbose", help="Run make with verbose output")])
 
     # These files and directories will be recursively copied into generated projects from the CRT.
@@ -41,42 +42,40 @@ class Handler(server.ProjectAPIHandler):
 
     def generate_project(self, model_library_format_path, standalone_crt_dir, project_dir, options):
         # Make project directory.
-        os.makedirs(project_dir)
+        project_dir.mkdir(parents=True)
 
         # Copy ourselves to the generated project. TVM may perform further build steps on the generated project
         # by launching the copy.
-        shutil.copy2(__file__, os.path.join(project_dir, os.path.basename(__file__)))
+        shutil.copy2(__file__, project_dir / os.path.basename(__file__))
 
         # Place Model Library Format tarball in the special location, which this script uses to decide
         # whether it's being invoked in a template or generated project.
-        project_model_library_format_tar_path = os.path.join(project_dir, MODEL_LIBRARY_FORMAT_RELPATH)
-        shutil.copy2(model_library_format_path, project_model_library_format_tar_path)
+        project_model_library_format_path = project_dir / MODEL_LIBRARY_FORMAT_RELPATH
+        shutil.copy2(model_library_format_path, project_model_library_format_path)
 
         # Extract Model Library Format tarball.into <project_dir>/model.
-        extract_path = os.path.splitext(project_model_library_format_tar_path)[0]
-        with tarfile.TarFile(project_model_library_format_tar_path) as tf:
+        extract_path = project_dir / project_model_library_format_path.stem
+        with tarfile.TarFile(project_model_library_format_path) as tf:
             os.makedirs(extract_path)
             tf.extractall(path=extract_path)
 
         # Populate CRT.
-        crt_path = os.path.join(project_dir, "crt")
+        crt_path = project_dir / "crt"
         os.mkdir(crt_path)
         for item in self.CRT_COPY_ITEMS:
-            src_path = os.path.join(standalone_crt_dir, item)
-            dst_path = os.path.join(crt_path, item)
+            src_path = standalone_crt_dir / item
+            dst_path = crt_path / item
             if os.path.isdir(src_path):
                 shutil.copytree(src_path, dst_path)
             else:
                 shutil.copy2(src_path, dst_path)
 
-
         # Populate Makefile.
-        shutil.copy2(os.path.join(os.path.dirname(__file__), "Makefile"),
-                     os.path.join(project_dir, "Makefile"))
+        shutil.copy2(pathlib.Path(__file__).parent / "Makefile", project_dir / "Makefile")
 
         # Populate crt-config.h
-        crt_config_dir = os.path.join(project_dir, "crt_config")
-        os.mkdir(crt_config_dir)
+        crt_config_dir = project_dir / "crt_config"
+        crt_config_dir.mkdir()
         shutil.copy2(os.path.join(os.path.dirname(__file__), "..", "crt_config-template.h"),
                      os.path.join(crt_config_dir, "crt_config.h"))
 
@@ -92,7 +91,7 @@ class Handler(server.ProjectAPIHandler):
 
         args.append(self.BUILD_TARGET)
 
-        subprocess.check_call(args)
+        subprocess.check_call(args, cwd=PROJECT_DIR)
 
     def flash(self, options):
         pass  # Flashing does nothing on host.
@@ -135,8 +134,11 @@ class Handler(server.ProjectAPIHandler):
         fd = self._proc.stdout.fileno()
         end_time = None if timeout_sec is None else time.monotonic() + timeout_sec
 
-        self._await_ready([fd], [], end_time=end_time)
-        to_return = os.read(fd, n)
+        try:
+            self._await_ready([fd], [], end_time=end_time)
+            to_return = os.read(fd, n)
+        except BrokenPipeError:
+            to_return = 0
 
         if not to_return:
             self.disconnect_transport()
@@ -154,7 +156,11 @@ class Handler(server.ProjectAPIHandler):
         data_len = len(data)
         while data:
             self._await_ready([], [fd], end_time=end_time)
-            num_written = os.write(fd, data)
+            try:
+                num_written = os.write(fd, data)
+            except BrokenPipeError:
+                num_written = 0
+
             if not num_written:
                 self.disconnect_transport()
                 raise server.TransportClosedError()
