@@ -144,7 +144,7 @@ def test_graph_executor():
     with tvm.transform.PassContext(opt_level=3, config={"tir.disable_vectorize": True}):
         factory = tvm.relay.build(relay_mod, target=TARGET)
 
-    with _make_session(workspace, factory.get_lib()) as sess:
+    with _make_session(workspace, factory) as sess:
         graph_mod = tvm.micro.create_local_graph_executor(
             factory.get_graph_json(), sess.get_system_lib(), sess.device
         )
