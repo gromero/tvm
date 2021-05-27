@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+import pathlib
 import re
 import sys
 import textwrap
@@ -27,23 +28,6 @@ ProjectOption = collections.namedtuple('ProjectOption', ('name', 'help'))
 
 
 ServerInfo = collections.namedtuple('ServerInfo', ('platform_name', 'is_template', 'model_library_format_path', 'project_options'))
-
-
-
-class TransportClosedError(Exception):
-    """Raised when a transport can no longer be used due to underlying I/O problems."""
-
-
-class IoTimeoutError(Exception):
-    """Raised when the I/O operation could not be completed before the timeout.
-
-    Specifically:
-     - when no data could be read before the timeout
-     - when some of the write data could be written before the timeout
-
-    Note the asymmetric behavior of read() vs write(), since in one case the total length of the
-    data to transfer is known.
-    """
 
 
 # Timeouts supported by the underlying C++ MicroSession.
@@ -69,7 +53,11 @@ TransportTimeouts = collections.namedtuple(
 
 
 class ErrorCode(enum.IntEnum):
-    """JSON-RPC standard error codes."""
+    """Enumerates error codes which can be returned. Includes JSON-RPC standard and custom codes."""
+    # Custom (in reserved error code space).
+    SERVER_ERROR = -32000  # A generic error was raised while processing the request.
+
+    # JSON-RPC standard
     PARSE_ERROR = -32700
     INVALID_REQUEST = -32600
     METHOD_NOT_FOUND = -32601
@@ -85,8 +73,89 @@ class JSONRPCError(Exception):
         self.message = message
         self.data = data
 
+    def to_json(self):
+        return {"code": self.code,
+                "message": self.message,
+                "data": self.data,
+        }
+
     def __str__(self):
-        return f"JSON-RPC error # {self.code}: {self.message}\n{self.data!r}"
+        data_str = ''
+        if self.data:
+            if isinstance(self.data, dict) and self.data.get("traceback"):
+                data_str = f'\n{self.data["traceback"]}'
+            else:
+                data_str = f'\n{self.data!r}'
+        return f"JSON-RPC error # {self.code}: {self.message}" + data_str
+
+
+class ServerError(JSONRPCError):
+
+    @classmethod
+    def from_exception(self, exc, **kw):
+        to_return = cls(**kw)
+        to_return.set_traceback(traceback.TracebackException.from_exception(exc).format())
+        return to_return
+
+    def __init__(self, message=None, data=None, client_context=None):
+        if message is None:
+            message = self.__class__.__name__
+        super(ServerError, self).__init__(ErrorCode.SERVER_ERROR, message, data)
+        self.client_context = client_context
+
+    def __str__(self):
+        context_str = f"{self.client_context}: " if self.client_context is not None else ""
+        super_str = super(ServerError, self).__str__()
+        return context_str + super_str
+
+    def set_traceback(self, traceback):
+        if self.data is None:
+            self.data = {}
+
+        if "traceback" not in self.data:
+            # NOTE: TVM's FFI layer reorders Python stack traces several times and strips
+            # intermediary lines that start with "Traceback". This logic adds a comment to the first
+            # stack frame to explicitly identify the first stack frame line that occurs on the server.
+            traceback_list = list(traceback)
+
+            # The traceback list contains one entry per stack frame, and each entry contains 1-2 lines:
+            #    File "path/to/file", line 123, in <method>:
+            #      <copy of the line>
+            # We want to place a comment on the first line of the outermost frame to indicate this is the
+            # server-side stack frame.
+            first_frame_list = traceback_list[1].split('\n')
+            self.data["traceback"] = (
+                traceback_list[0] +
+                f"{first_frame_list[0]}  # <--- Outermost server-side stack frame\n" +
+                "\n".join(first_frame_list[1:]) +
+                "".join(traceback_list[2:])
+                )
+
+    @classmethod
+    def from_json(cls, client_context, json_error):
+        assert json_error["code"] == ErrorCode.SERVER_ERROR
+
+        for sub_cls in cls.__subclasses__():
+            if sub_cls.__name__ == json_error["message"]:
+                return sub_cls(message=json_error["message"], data=json_error.get("data"), client_context=client_context)
+
+        return cls(ErrorCode.SERVER_ERROR, json_error["message"], data=json_error.get("data"), client_context=client_context)
+
+
+class TransportClosedError(ServerError):
+    """Raised when a transport can no longer be used due to underlying I/O problems."""
+
+
+class IoTimeoutError(ServerError):
+    """Raised when the I/O operation could not be completed before the timeout.
+
+    Specifically:
+     - when no data could be read before the timeout
+     - when some of the write data could be written before the timeout
+
+    Note the asymmetric behavior of read() vs write(), since in one case the total length of the
+    data to transfer is known.
+    """
 
 
 class ProjectAPIHandler(metaclass=abc.ABCMeta):
@@ -96,17 +165,17 @@ class ProjectAPIHandler(metaclass=abc.ABCMeta):
         raise NotImplementedError()
 
     @abc.abstractmethod
-    def generate_project(self, model_library_format_path : str, standalone_crt_dir : str, project_dir : str, options : dict):
+    def generate_project(self, model_library_format_path : pathlib.Path, standalone_crt_dir : pathlib.Path, project_dir : pathlib.Path, options : dict):
         """Generate a project from the given artifacts, copying ourselves to that project.
 
         Parameters
         ----------
-        model_library_format_path : str
+        model_library_format_path : pathlib.Path
             Path to the Model Library Format tar archive.
-        standalone_crt_dir : str
+        standalone_crt_dir : pathlib.Path
             Path to the root directory of the "standalone_crt" TVM build artifact. This contains the
             TVM C runtime.
-        project_dir : str
+        project_dir : pathlib.Path
             Path to a nonexistent directory which should be created and filled with the generated
             project.
         options : dict
@@ -291,18 +360,25 @@ class ProjectAPIServer:
             _LOG.error("Caught error reading request", exc_info=1)
             return False
 
+        did_validate = False
         try:
             self._validate_request(request)
-        except ValidationError as exc:
-            request_id = None if not isinstance(request, dict) else request.get('id')
-            self._reply_error(request_id, traceback.TracebackException.from_exception(exc))
-            return False
-
-        try:
+            did_validate = True
             self._dispatch_request(request)
+        except JSONRPCError as exc:
+            exc.set_traceback(traceback.TracebackException.from_exception(exc).format())
+            request_id = None if not isinstance(request, dict) else request.get('id')
+            self._reply_error(request_id, exc)
+            return did_validate
         except Exception as exc:
-            self._reply_error(request["id"], traceback.TracebackException.from_exception(exc))
-            return True
+            message = "validating request"
+            if did_validate:
+                message = f"calling method {request['method']}"
+
+            exc = ServerError.from_exception(exc, message=message)
+            request_id = None if not isinstance(request, dict) else request.get('id')
+            self._reply_error(request_id, exc)
+            return did_validate
 
         return True
 
@@ -376,12 +452,7 @@ class ProjectAPIServer:
                                f'{request["method"]}: extra parameters: {", ".join(extra_params)}',
                                None)
 
-        try:
-            return_value = dispatch_method(**params)
-        except Exception as exc:
-            self._reply_error(request['id'], traceback.TracebackException.from_exception(exc))
-            return
-
+        return_value = dispatch_method(**params)
         self._write_reply(request['id'], result=return_value)
 
     def _write_reply(self, request_id, result=None, error=None):
@@ -396,18 +467,24 @@ class ProjectAPIServer:
         else:
             reply_dict["result"] = result
 
-
         reply_str = json.dumps(reply_dict)
         _LOG.debug('write reply -> %r', reply_dict)
         self._write_file.write(reply_str)
         self._write_file.write('\n')
 
     def _reply_error(self, request_id, exception):
-        self._write_reply(request_id, error='\n'.join(exception.format()))
+        self._write_reply(request_id, error=exception.to_json())
+
+    def _dispatch_generate_project(self, model_library_format_path, standalone_crt_dir, project_dir, options):
+        return self._handler.generate_project(pathlib.Path(model_library_format_path),
+                                              pathlib.Path(standalone_crt_dir),
+                                              pathlib.Path(project_dir),
+                                              options)
 
     def _dispatch_server_info_query(self):
         query_reply = self._handler.server_info_query()
         to_return = query_reply._asdict()
+        to_return["model_library_format_path"] = str(to_return["model_library_format_path"])
         to_return["protocol_version"] = self._PROTOCOL_VERSION
         to_return["project_options"] = [o._asdict() for o in query_reply.project_options]
         return to_return
@@ -416,24 +493,25 @@ class ProjectAPIServer:
         reply = self._handler.connect_transport(options)
         return {"timeouts": reply._asdict()}
 
-    def _wrap_io_call(self, call):
-        try:
-            return call()
-        except IoTimeoutError as exc:
-            return {'error': {'name': 'io_timeout', 'message': str(exc)}}
-        except TransportClosedError as exc:
-            return {'error': {'name': 'transport_closed', 'message': str(exc)}}
+    # def _wrap_io_call(self, call):
+    #     try:
+    #         return call()
+    #     except IoTimeoutError as exc:
+    #         return {'error': {'name': 'io_timeout', 'message': str(exc)}}
+    #     except TransportClosedError as exc:
+    #         return {'error': {'name': 'transport_closed', 'message': str(exc)}}
 
     def _dispatch_write_transport(self, data, timeout_sec):
-        return self._wrap_io_call(lambda: self._handler.write_transport(base64.b85decode(data), timeout_sec))
+        return self._handler.write_transport(base64.b85decode(data), timeout_sec)
+#        return self._wrap_io_call(lambda: self._handler.write_transport(base64.b85decode(data), timeout_sec))
 
     def _dispatch_read_transport(self, n, timeout_sec):
-        def _do_read():
-            reply = self._handler.read_transport(n, timeout_sec)
-            reply['data'] = str(base64.b85encode(reply['data']), 'utf-8')
-            return reply
-
-        return self._wrap_io_call(_do_read)
+#        def _do_read():
+        reply = self._handler.read_transport(n, timeout_sec)
+        reply['data'] = str(base64.b85encode(reply['data']), 'utf-8')
+        return reply
+#
+#        return self._wrap_io_call(_do_read)
 
 def main(handler : ProjectAPIHandler, argv : typing.List[str] = None):
     """Start a Project API server.
