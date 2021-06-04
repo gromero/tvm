@@ -31,8 +31,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 # For debugging
-if [ "${TVM_QEMU_DEBUG}" != "" ]; then
-    ARGS=( "${ARGS[@]}" -s -S )
+if [ "${TVM_QEMU_GDBSERVER_PORT}" != "" ]; then
+    ARGS=( "${ARGS[@]}" -gdb "tcp::${TVM_QEMU_GDBSERVER_PORT}" -S )
 fi
 
 "${ARGS[@]}"

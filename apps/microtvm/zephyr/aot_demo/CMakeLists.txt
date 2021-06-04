@@ -9,19 +9,13 @@ set(QEMU_PIPE "\${QEMU_PIPE}")  # QEMU_PIPE is set by the calling TVM instance.
 find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
 project(microtvm_zephyr_runtime)
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
+# define a library for the model sources.
+zephyr_library_named(tvm_model)
+file(GLOB_RECURSE tvm_model_srcs model/codegen/host/src/*.c model/codegen/host/lib/*.o)
+target_sources(tvm_model PRIVATE ${tvm_model_srcs})
+target_include_directories(tvm_model PRIVATE crt_config crt/include)
+target_compile_options(tvm_model PRIVATE -Wno-unused-variable)  # TVM-generated code tends to include lots of these.
+target_link_libraries(app PRIVATE tvm_model)
 
-target_sources(app PRIVATE src/zephyr_uart.c)
 target_sources(app PRIVATE src/main.c)
-
-foreach(tvm_lib ${TVM_LIBS})
-  string(LENGTH ${tvm_lib} tvm_lib_length)
-  math(EXPR tvm_lib_cut "${tvm_lib_length} - 2")
-  string(SUBSTRING ${tvm_lib} 3 ${tvm_lib_cut} tvm_lib_name)
-  add_library(${tvm_lib_name} STATIC IMPORTED)
-  set_target_properties(${tvm_lib_name} PROPERTIES
-      IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/${tvm_lib})
-  target_link_libraries(app PRIVATE ${tvm_lib_name})
-endforeach(tvm_lib ${TVM_LIBS})
-
-target_include_directories(app PRIVATE ${TVM_INCLUDE_DIRS})
+target_include_directories(app PRIVATE crt_config crt/include)

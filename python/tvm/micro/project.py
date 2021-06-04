@@ -88,7 +88,8 @@ class TemplateProject:
         self._client.generate_project(
             model_library_format_path=model_library_format_path,
             standalone_crt_dir=get_standalone_crt_dir(),
-            project_dir=project_dir)
+            project_dir=project_dir,
+            options=self._options)
 
         return GeneratedProject.from_directory(project_dir, self._options)
 

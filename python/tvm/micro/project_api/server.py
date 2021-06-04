@@ -15,8 +15,10 @@ import logging
 import os
 import pathlib
 import re
+import select
 import sys
 import textwrap
+import time
 import traceback
 import typing
 
@@ -493,25 +495,126 @@ class ProjectAPIServer:
         reply = self._handler.connect_transport(options)
         return {"timeouts": reply._asdict()}
 
-    # def _wrap_io_call(self, call):
-    #     try:
-    #         return call()
-    #     except IoTimeoutError as exc:
-    #         return {'error': {'name': 'io_timeout', 'message': str(exc)}}
-    #     except TransportClosedError as exc:
-    #         return {'error': {'name': 'transport_closed', 'message': str(exc)}}
-
     def _dispatch_write_transport(self, data, timeout_sec):
-        return self._handler.write_transport(base64.b85decode(data), timeout_sec)
-#        return self._wrap_io_call(lambda: self._handler.write_transport(base64.b85decode(data), timeout_sec))
+        return {"bytes_written": self._handler.write_transport(base64.b85decode(data), timeout_sec)}
 
     def _dispatch_read_transport(self, n, timeout_sec):
-#        def _do_read():
-        reply = self._handler.read_transport(n, timeout_sec)
-        reply['data'] = str(base64.b85encode(reply['data']), 'utf-8')
-        return reply
-#
-#        return self._wrap_io_call(_do_read)
+        reply_data = self._handler.read_transport(n, timeout_sec)
+        return {'data': str(base64.b85encode(reply_data), 'utf-8')}
+
+
+def _await_nonblocking_ready(rlist, wlist, timeout_sec=None, end_time=None):
+    if end_time is None:
+        return True
+
+    if timeout_sec is None:
+        timeout_sec = max(0, end_time - time.monotonic())
+    rlist, wlist, xlist = select.select(rlist, wlist, rlist + wlist, timeout_sec)
+    if not rlist and not wlist and not xlist:
+        raise IoTimeoutError()
+
+    return True
+
+
+def read_with_timeout(fd, n, timeout_sec):
+    """Read data from a file descriptor, with timeout.
+
+    This function is intended as a helper function for implementations of ProjectAPIHandler
+    read_transport. Tested on Linux and OS X. Not tested on Windows.
+
+    Parameters
+    ----------
+    fd : int
+        File descriptor to read from. Must be opened in non-blocking mode (e.g. with O_NONBLOCK)
+        if timeout_sec is not None.
+
+    n : int
+        Maximum number of bytes to read.
+
+    timeout_sec : float or None
+        If not None, maximum number of seconds to wait before raising IoTimeoutError.
+
+    Returns
+    -------
+    bytes :
+        If at least one byte was received before timeout_sec, returns a bytes object with length
+        in [1, n]. If timeout_sec is None, returns the equivalent of os.read(fd, n).
+
+    Raises
+    ------
+    IoTimeoutException :
+        When timeout_sec is not None and that number of seconds elapses before any data is read.
+    """
+    end_time = None if timeout_sec is None else time.monotonic() + timeout_sec
+
+    while True:
+        _await_nonblocking_ready([fd], [], end_time=end_time)
+        try:
+            to_return = os.read(fd, n)
+            break
+        except BlockingIOError:
+            pass
+
+    # When EOF is reached, close the file.
+    if not to_return:
+        os.close(fd)
+        raise TransportClosedError()
+
+    return to_return
+
+
+def write_with_timeout(fd, data, timeout_sec):
+    """Write data to a file descriptor, with timeout.
+
+    This function is intended as a helper function for implementations of ProjectAPIHandler
+    write_transport. Tested on Linux and OS X. Not tested on Windows.
+
+    Parameters
+    ----------
+    fd : int
+        File descriptor to read from. Must be opened in non-blocking mode (e.g. with O_NONBLOCK)
+        if timeout_sec is not None.
+
+    data : bytes
+        Data to write.
+
+    timeout_sec : float or None
+        If not None, maximum number of seconds to wait before raising IoTimeoutError.
+
+    Returns
+    -------
+    int :
+        The number of bytes written to the file descriptor, if any bytes were written. A value
+        in [1, len(data)]. If timeout_sec is None, returns the equivalent of os.write(fd, data).
+
+    Raises
+    ------
+    IoTimeoutException :
+        When timeout_sec is not None and that number of seconds elapses before any data is read.
+    """
+    end_time = None if timeout_sec is None else time.monotonic() + timeout_sec
+
+    num_written = 0
+    while data:
+        try:
+            _await_nonblocking_ready([], [fd], end_time=end_time)
+        except IoTimeoutError as exc:
+            if num_written:
+                return num_written
+
+            raise exc
+
+        num_written_this_cycle = os.write(fd, data)
+
+        if not num_written_this_cycle:
+            os.close(fd)
+            raise base.TransportClosedError()
+
+        data = data[num_written_this_cycle:]
+        num_written += num_written_this_cycle
+
+    return num_written
+
 
 def main(handler : ProjectAPIHandler, argv : typing.List[str] = None):
     """Start a Project API server.
