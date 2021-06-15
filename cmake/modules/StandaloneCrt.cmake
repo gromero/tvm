@@ -105,7 +105,7 @@ if(USE_MICRO)
     endforeach()
 
     set(make_common_args
-        "CRT_CONFIG=template/host/crt_config.h"
+        "CRT_CONFIG=${CMAKE_SOURCE_DIR}/src/runtime/micro/crt_config.h"
         "BUILD_DIR=${host_build_dir_abspath}"
         "EXTRA_CFLAGS=-fPIC"
         "EXTRA_CXXFLAGS=-fPIC"
