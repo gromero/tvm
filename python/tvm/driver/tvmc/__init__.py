@@ -23,6 +23,7 @@ from . import autotuner
 from . import compiler
 from . import runner
 from . import result_utils
+from . import micro
 from .frontends import load_model as load
 from .compiler import compile_model as compile
 from .runner import run_module as run
