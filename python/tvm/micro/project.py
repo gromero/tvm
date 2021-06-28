@@ -69,6 +69,25 @@ class TemplateProject:
 
     @classmethod
     def from_directory(cls, template_project_dir, options):
+        """Instantiate a tvm.micro.project_api.client object given a 'source' directory.
+        That 'source' directory is the one that contains a launch_microtvm_api_server.sh or
+        a microtvm_api_server.py file which can be used to bring up a server and then have
+        a project_api.client connected to it - the client class which will be effectively
+        returned.
+
+        Params:
+        ------
+
+        template_project_dir : dir containing proper .sh and .py server startup files.
+
+        options :
+
+        Returns:
+        --------
+
+        A instantiated client class connected to the server found in 'template_project_dir'.
+
+        """
         return cls(client.instantiate_from_dir(template_project_dir), options)
 
     def __init__(self, client, options):
@@ -78,13 +97,8 @@ class TemplateProject:
         if not self._info['is_template']:
             raise NotATemplateProjectError()
 
-    def generate_project(self, graph_executor_factory, project_dir):
-        """Generate a project given GraphRuntimeFactory."""
-        model_library_dir = utils.tempdir()
-        model_library_format_path = model_library_dir.relpath('model.tar')
-        export_model_library_format(
-            graph_executor_factory, model_library_format_path)
-
+    def generate_project(self, model_library_format_path, project_dir):
+        """Generate a project given a MLF archive and an output dir."""
         self._client.generate_project(
             model_library_format_path=model_library_format_path,
             standalone_crt_dir=get_standalone_crt_dir(),
@@ -94,6 +108,6 @@ class TemplateProject:
         return GeneratedProject.from_directory(project_dir, self._options)
 
 
-def generate_project(template_project_dir : str, graph_executor_factory, project_dir : str, options : dict = None):
+def generate_project(template_project_dir : str, model_library_format_path : str, project_dir : str, options : dict = None):
     template = TemplateProject.from_directory(template_project_dir, options)
-    return template.generate_project(graph_executor_factory, project_dir)
+    return template.generate_project(model_library_format_path, project_dir)
