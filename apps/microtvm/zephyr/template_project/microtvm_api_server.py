@@ -253,6 +253,11 @@ class Handler(server.ProjectAPIHandler):
         shutil.copy2(API_SERVER_DIR / "CMakeLists.txt", project_dir / "CMakeLists.txt")
         shutil.copy2(API_SERVER_DIR / "prj.conf", project_dir / "prj.conf")
 
+        # Populate per board configs.
+        boards_dir = project_dir / "boards"
+        boards_dir.mkdir()
+        shutil.copytree(API_SERVER_DIR / "boards", boards_dir, dirs_exist_ok=True)
+
         # Populate crt-config.h
         crt_config_dir = project_dir / "crt_config"
         crt_config_dir.mkdir()
