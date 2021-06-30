@@ -288,7 +288,7 @@ class Handler(server.ProjectAPIHandler):
 
     def flash(self, options):
         if self._is_qemu(options):
-            return  # NOTE: qemu requires no flash step--it is launched from connect_transport.
+            return  # NOTE: qemu requires no flash step--it is launched from open_transport.
 
         zephyr_board = options["zephyr_board"]
 
@@ -304,7 +304,7 @@ class Handler(server.ProjectAPIHandler):
 
         check_call(["make", "flash"], cwd=API_SERVER_DIR / "build")
 
-    def _connect_qemu_transport(self, options):
+    def _open_qemu_transport(self, options):
         zephyr_board = options["zephyr_board"]
         # For Zephyr boards that run emulated by default but don't have the prefix "qemu_" in their
         # board names, a suffix "-qemu" is added by users of µTVM when specifying the board name to
@@ -316,9 +316,9 @@ class Handler(server.ProjectAPIHandler):
         self._transport = ZephyrQemuTransport(options)
         return self._transport.open()
 
-    def connect_transport(self, options):
+    def open_transport(self, options):
         if self._is_qemu(options):
-            return self._connect_qemu_transport(options)
+            return self._open_qemu_transport(options)
 
         self._proc = subprocess.Popen([self.BUILD_TARGET], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
         _set_nonblock(self._proc.stdin.fileno())
@@ -327,7 +327,7 @@ class Handler(server.ProjectAPIHandler):
                                         session_start_timeout_sec=0,
                                         session_established_timeout_sec=0)
 
-    def disconnect_transport(self):
+    def close_transport(self):
         if self._transport is not None:
             self._transport.close()
             self._transport = None
@@ -427,7 +427,7 @@ class ZephyrSerialTransport:
         to_return = os.read(fd, n)
 
         if not to_return:
-            self.disconnect_transport()
+            self.close_transport()
             raise server.TransportClosedError()
 
         return {"data": to_return}
@@ -444,7 +444,7 @@ class ZephyrSerialTransport:
             self._await_ready([], [fd], end_time=end_time)
             num_written = os.write(fd, data)
             if not num_written:
-                self.disconnect_transport()
+                self.close_transport()
                 raise server.TransportClosedError()
 
             data = data[num_written:]

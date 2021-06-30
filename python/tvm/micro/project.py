@@ -19,12 +19,12 @@ class ProjectTransport(Transport):
         return self._timeouts
 
     def open(self):
-        reply = self._client.connect_transport(self._options)
+        reply = self._client.open_transport(self._options)
         self._timeouts = TransportTimeouts(**reply["timeouts"])
 
     def close(self):
         if not self._client.shutdown:
-            self._client.disconnect_transport()
+            self._client.close_transport()
 
     def write(self, data, timeout_sec):
         self._client.write_transport(data, timeout_sec)

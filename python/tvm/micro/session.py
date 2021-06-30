@@ -100,12 +100,11 @@ class Session:
             return bytes([])
 
     def _wrap_transport_write(self, data, timeout_microsec):
-        bytes_written = self.transport.write(
+        self.transport.write(
             data, float(timeout_microsec) / 1e6 if timeout_microsec is not None else None
         )
 
-        if bytes_written != len(data):
-            raise ShortWriteError(f"Wrote {bytes_written}, expected {len(data)}")
+        return len(data)  # TODO(areusch): delete
 
     def __enter__(self):
         """Initialize this session and establish an RPC session with the on-device RPC server.

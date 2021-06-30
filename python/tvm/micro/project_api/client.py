@@ -121,11 +121,11 @@ class ProjectAPIClient:
     def flash(self, options : dict = None):
         return self._request_reply("flash", {"options": (options if options is not None else {})})
 
-    def connect_transport(self, options : dict = None):
-        return self._request_reply("connect_transport", {"options": (options if options is not None else {})})
+    def open_transport(self, options : dict = None):
+        return self._request_reply("open_transport", {"options": (options if options is not None else {})})
 
-    def disconnect_transport(self):
-        return self._request_reply("disconnect_transport", {})
+    def close_transport(self):
+        return self._request_reply("close_transport", {})
 
     def read_transport(self, n, timeout_sec):
         reply = self._request_reply("read_transport", {"n": n, "timeout_sec": timeout_sec})

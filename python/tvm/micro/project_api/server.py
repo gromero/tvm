@@ -494,6 +494,9 @@ class ProjectAPIServer:
         reply_data = self._handler.read_transport(n, timeout_sec)
         return {'data': str(base64.b85encode(reply_data), 'utf-8')}
 
+    def _dispatch_write_transport(self, data, timeout_sec):
+        self._handler.write_transport(base64.b85decode(data), timeout_sec)
+
 
 def _await_nonblocking_ready(rlist, wlist, timeout_sec=None, end_time=None):
     if end_time is None:
