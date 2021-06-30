@@ -9,7 +9,7 @@ set(QEMU_PIPE "\${QEMU_PIPE}")  # QEMU_PIPE is set by the calling TVM instance.
 find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
 project(microtvm_zephyr_runtime)
 
-set(CRT_LIBS utvm_rpc_server utvm_rpc_common common)
+set(CRT_LIBS microtvm_rpc_server microtvm_rpc_common common)
 set(CRT_LIB_BASE crt/src/runtime/crt)
 #file(GLOB CRT_LIB_DIRS crt/src/runtime/crt/*)
 foreach(crt_lib_name ${CRT_LIBS})
