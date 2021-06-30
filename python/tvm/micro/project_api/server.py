@@ -70,10 +70,11 @@ class ErrorCode(enum.IntEnum):
 class JSONRPCError(Exception):
     """An error class with properties that meet the JSON-RPC error spec."""
 
-    def __init__(self, code, message, data):
+    def __init__(self, code, message, data, client_context=None):
         self.code = code
         self.message = message
         self.data = data
+        self.client_context = client_context
 
     def to_json(self):
         return {"code": self.code,
@@ -89,6 +90,23 @@ class JSONRPCError(Exception):
             else:
                 data_str = f'\n{self.data!r}'
         return f"JSON-RPC error # {self.code}: {self.message}" + data_str
+
+    @classmethod
+    def from_json(cls, client_context, json_error):
+        # Subclasses of ServerError capture exceptions that occur in the Handler, and thus return a
+        # traceback. The encoding in `json_error` is also slightly different to allow the specific subclass
+        # to be identified.
+        found_server_error = False
+        try:
+            if ErrorCode(json_error["code"]) == ErrorCode.SERVER_ERROR:
+                foudn_server_error = True
+        except ValueError:
+             ServerError.from_json(client_context, json_error)
+
+        if found_server_error:
+            return ServerError.from_json(client_context, json_error)
+
+        return cls(json_error["code"], json_error["message"], json_error.get("data", None), client_context=client_context)
 
 
 class ServerError(JSONRPCError):
@@ -363,7 +381,8 @@ class ProjectAPIServer:
             did_validate = True
             self._dispatch_request(request)
         except JSONRPCError as exc:
-            exc.set_traceback(traceback.TracebackException.from_exception(exc).format())
+            if isinstance(exc, ServerError):
+                exc.set_traceback(traceback.TracebackException.from_exception(exc).format())
             request_id = None if not isinstance(request, dict) else request.get('id')
             self._reply_error(request_id, exc)
             return did_validate

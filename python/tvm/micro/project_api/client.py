@@ -66,7 +66,7 @@ class ProjectAPIClient:
 
     def _request_reply(self, method, params):
         if self.is_shutdown:
-            raise ConnectionShutdownError()
+            raise ConnectionShutdownError("connection already closed")
 
         request = {
             "jsonrpc": "2.0",
@@ -86,7 +86,7 @@ class ProjectAPIClient:
         _LOG.debug("recv <- %s", reply_line)
         if not reply_line:
             self.shutdown()
-            raise MalformedReplyError()
+            raise ConnectionShutdownError("got EOF reading reply from API server")
 
         reply = json.loads(reply_line)
 
@@ -100,7 +100,7 @@ class ProjectAPIClient:
                 f"Reply id ({reply['id']}) does not equal request id ({request['id']}")
 
         if "error" in reply:
-            raise server.ServerError.from_json(f"calling method {method}", reply["error"])
+            raise server.JSONRPCError.from_json(f"calling method {method}", reply["error"])
         elif "result" not in reply:
             raise MalformedReplyError(f"Expected 'result' key in server reply, got {reply!r}")
 
