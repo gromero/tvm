@@ -56,10 +56,12 @@ class CallbackWriteStream : public WriteStream {
     bytes.data = (const char*)data;
     bytes.size = data_size_bytes;
     if (write_timeout_ == ::std::chrono::microseconds::zero()) {
-      return static_cast<int64_t>(fsend_(bytes, nullptr));
+      fsend_(bytes, nullptr);
     } else {
-      return static_cast<int64_t>(fsend_(bytes, write_timeout_.count()));
+      fsend_(bytes, write_timeout_.count());
     }
+
+    return static_cast<ssize_t>(data_size_bytes);
   }
 
   void PacketDone(bool is_valid) override {}

@@ -102,7 +102,7 @@ class Handler(server.ProjectAPIHandler):
         new_flag = fcntl.fcntl(fd, fcntl.F_GETFL)
         assert (new_flag & os.O_NONBLOCK) != 0, "Cannot set file descriptor {fd} to non-blocking"
 
-    def connect_transport(self, options):
+    def open_transport(self, options):
         self._proc = subprocess.Popen([self.BUILD_TARGET], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
         self._set_nonblock(self._proc.stdin.fileno())
         self._set_nonblock(self._proc.stdout.fileno())
@@ -110,7 +110,7 @@ class Handler(server.ProjectAPIHandler):
                                         session_start_timeout_sec=0,
                                         session_established_timeout_sec=0)
 
-    def disconnect_transport(self):
+    def close_transport(self):
         if self._proc is not None:
             proc = self._proc
             self._proc = None
@@ -167,7 +167,6 @@ class Handler(server.ProjectAPIHandler):
 
             data = data[num_written:]
 
-        return {"bytes_written": data_len}
 
 
 if __name__ == '__main__':

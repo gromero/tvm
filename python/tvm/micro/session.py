@@ -39,6 +39,10 @@ class SessionTerminatedError(Exception):
     """Raised when a transport read operationd discovers that the remote session is terminated."""
 
 
+class ShortWriteError(Exception):
+    """Raised when less bytes were written than expected."""
+
+
 class Session:
     """MicroTVM Device Session
 
@@ -96,12 +100,12 @@ class Session:
             return bytes([])
 
     def _wrap_transport_write(self, data, timeout_microsec):
-        try:
-            return self.transport.write(
-                data, float(timeout_microsec) / 1e6 if timeout_microsec is not None else None
-            )
-        except IoTimeoutError:
-            return 0
+        bytes_written = self.transport.write(
+            data, float(timeout_microsec) / 1e6 if timeout_microsec is not None else None
+        )
+
+        if bytes_written != len(data):
+            raise ShortWriteError(f"Wrote {bytes_written}, expected {len(data)}")
 
     def __enter__(self):
         """Initialize this session and establish an RPC session with the on-device RPC server.

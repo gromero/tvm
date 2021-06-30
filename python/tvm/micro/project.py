@@ -27,7 +27,7 @@ class ProjectTransport(Transport):
             self._client.disconnect_transport()
 
     def write(self, data, timeout_sec):
-        return self._client.write_transport(data, timeout_sec)["bytes_written"]
+        self._client.write_transport(data, timeout_sec)
 
     def read(self, n, timeout_sec):
         return self._client.read_transport(n, timeout_sec)["data"]
