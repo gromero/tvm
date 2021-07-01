@@ -9,14 +9,16 @@ import select
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
+
+import serial
+import serial.tools.list_ports
+import yaml
+
 from tvm.micro.project_api import server
-from tvm.micro.transport import Transport
-from tvm.micro.transport import file_descriptor
-from tvm.micro.transport import serial
-from tvm.micro.transport import wakeup
 
 
 _LOG = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ class CMakeCache(collections.Mapping):
 
     def __getitem__(self, key):
         if self._dict is None:
-            self._read_cmake_cache()
+            self._dict = self._read_cmake_cache()
 
         return self._dict[key]
 
@@ -111,7 +113,7 @@ def _get_device_args(options, cmake_entries):
     flash_runner = _get_flash_runner()
 
     if flash_runner == "nrfjprog":
-        return _get_nrf_device_args()
+        return _get_nrf_device_args(options)
 
     if flash_runner == "openocd":
         return _get_openocd_device_args(options)
@@ -229,6 +231,8 @@ class Handler(server.ProjectAPIHandler):
         project_model_library_format_tar_path = project_dir / MODEL_LIBRARY_FORMAT_RELPATH
         shutil.copy2(model_library_format_path, project_model_library_format_tar_path)
 
+        shutil.copytree(API_SERVER_DIR / "boards", project_dir / "boards")
+
         # Extract Model Library Format tarball.into <project_dir>/model.
         extract_path = os.path.splitext(project_model_library_format_tar_path)[0]
         with tarfile.TarFile(project_model_library_format_tar_path) as tf:
@@ -299,7 +303,7 @@ class Handler(server.ProjectAPIHandler):
         #  ERROR: your device. Please use --recover to unlock the device.
         if zephyr_board.startswith("nrf5340dk") and _get_flash_runner() == "nrfjprog":
             recover_args = ["nrfjprog", "--recover"]
-            recover_args.extend(_get_nrf_device_args())
+            recover_args.extend(_get_nrf_device_args(options))
             self._subprocess_env.run(recover_args, cwd=build_dir)
 
         check_call(["make", "flash"], cwd=API_SERVER_DIR / "build")
@@ -313,19 +317,17 @@ class Handler(server.ProjectAPIHandler):
         if "-qemu" in zephyr_board:
             zephyr_board = zephyr_board.replace("-qemu", "")
 
-        self._transport = ZephyrQemuTransport(options)
-        return self._transport.open()
+        return ZephyrQemuTransport(options)
 
     def open_transport(self, options):
         if self._is_qemu(options):
-            return self._open_qemu_transport(options)
+            transport =self._open_qemu_transport(options)
+        else:
+            transport = ZephyrSerialTransport(options)
 
-        self._proc = subprocess.Popen([self.BUILD_TARGET], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
-        _set_nonblock(self._proc.stdin.fileno())
-        _set_nonblock(self._proc.stdout.fileno())
-        return server.TransportTimeouts(session_start_retry_timeout_sec=0,
-                                        session_start_timeout_sec=0,
-                                        session_established_timeout_sec=0)
+        to_return = transport.open()
+        self._transport = transport
+        return to_return
 
     def close_transport(self):
         if self._transport is not None:
@@ -335,12 +337,6 @@ class Handler(server.ProjectAPIHandler):
     def read_transport(self, n, timeout_sec):
         if self._transport is None:
             raise server.TransportClosedError()
-
-        # if not hasattr(self, '_first_read'):
-        #     read_buf = bytearray()
-        #     while b"\xfe\xff\xfd\x03\0\0\0\0\0\x02" b"fw" not in read_buf:
-        #         read_buf.extend(self._transport.read(10, 1.0))
-        #         print('got', read_buf)
 
         return self._transport.read(n, timeout_sec)
 
@@ -391,11 +387,17 @@ class ZephyrSerialTransport:
             parts = line.split()
             ports_by_vcom[parts[2]] = parts[1]
 
-        return {"port_path": ports_by_vcom["VCOM2"]}
+        return ports_by_vcom["VCOM2"]
 
     @classmethod
     def _find_openocd_serial_port(cls, options):
-        return {"grep": openocd_serial(options)}
+        serial_number = openocd_serial(options)
+        ports = [p for p in serial.tools.list_ports.grep(serial_number)]
+        if len(ports) != 1:
+            raise Exception(f"_find_openocd_serial_port: expected 1 port to match {serial_number}, "
+                            f"found: {ports!r}")
+
+        return ports[0].device
 
     @classmethod
     def _find_serial_port(cls, options):
@@ -412,44 +414,33 @@ class ZephyrSerialTransport:
         )
 
     def __init__(self, options):
-        port_kw = self._find_serial_port()
-        port_kw['baudrate'] = self._lookup_baud_rate(options)
-        self._port = serial.Serial(**port_kw)
+        self._options = options
+        self._port = None
+
+    def open(self):
+        port_path = self._find_serial_port(self._options)
+        self._port = serial.Serial(port_path, baudrate=self._lookup_baud_rate(self._options))
+        return server.TransportTimeouts(
+            session_start_retry_timeout_sec=2.0,
+            session_start_timeout_sec=5.0,
+            session_established_timeout_sec=5.0,
+        )
+
+    def close(self):
+        self._port.close()
+        self._port = None
 
     def read(self, n, timeout_sec):
-        if self._proc is None:
-            raise server.TransportClosedError()
-
-        fd = self._proc.stdout.fileno()
-        end_time = None if timeout_sec is None else time.monotonic() + timeout_sec
-
-        self._await_ready([fd], [], end_time=end_time)
-        to_return = os.read(fd, n)
-
-        if not to_return:
-            self.close_transport()
-            raise server.TransportClosedError()
-
-        return {"data": to_return}
+        self._port.timeout = timeout_sec
+        return self._port.read(n)
 
     def write(self, data, timeout_sec):
-        if self._proc is None:
-            raise server.TransportClosedError()
-
-        fd = self._proc.stdin.fileno()
-        end_time = None if timeout_sec is None else time.monotonic() + timeout_sec
-
-        data_len = len(data)
-        while data:
-            self._await_ready([], [fd], end_time=end_time)
-            num_written = os.write(fd, data)
-            if not num_written:
-                self.close_transport()
-                raise server.TransportClosedError()
-
-            data = data[num_written:]
-
-        return {"bytes_written": data_len}
+        self._port.write_timeout = timeout_sec
+        bytes_written = 0
+        while bytes_written < len(data):
+            n = self._port.write(data)
+            data = data[n:]
+            bytes_written += n
 
 
 class ZephyrQemuTransport:
