@@ -78,15 +78,26 @@ class TemplateProject:
         if not self._info['is_template']:
             raise NotATemplateProjectError()
 
-    def generate_project(self, graph_executor_factory, project_dir):
-        """Generate a project given GraphRuntimeFactory."""
-        model_library_dir = utils.tempdir()
-        model_library_format_path = model_library_dir.relpath('model.tar')
-        export_model_library_format(
-            graph_executor_factory, model_library_format_path)
+    def generate_project(
+        self,
+        project_dir,
+        mlf_path = None,
+        graph_executor_factory = None,
+    ):
+        assert mlf_path or graph_executor_factory, "A MLF path or a Graph executor must be specified"
+        assert not (mlf_path and graph_executor_factory), "Specifying both a MLF path and a Graph executor is invalid"
+
+        # Generate a project given a GraphRuntimeFactory, creating a MLF
+        # archive first, otherwise skip it and use specified MLF archive
+        # path directly to generate the project.
+        if graph_executor_factory is not None:
+            mlf_dir = utils.tempdir()
+            mlf_path = mlf_dir.relpath('model.tar')
+            export_model_library_format(
+                graph_executor_factory, mlf_path)
 
         self._client.generate_project(
-            model_library_format_path=model_library_format_path,
+            model_library_format_path=mlf_path,
             standalone_crt_dir=get_standalone_crt_dir(),
             project_dir=project_dir,
             options=self._options)
@@ -94,6 +105,15 @@ class TemplateProject:
         return GeneratedProject.from_directory(project_dir, self._options)
 
 
-def generate_project(template_project_dir : str, graph_executor_factory, project_dir : str, options : dict = None):
+def generate_project(
+    template_project_dir : str,
+    project_dir : str,
+    mlf_path = None,
+    graph_executor_factory = None,
+    options : dict = None
+):
+    assert mlf_path or graph_executor_factory, "A MLF path or a Graph executor must be specified"
+    assert not (mlf_path and graph_executor_factory), "Specifying both a MLF path and a Graph executor is invalid"
+
     template = TemplateProject.from_directory(template_project_dir, options)
-    return template.generate_project(graph_executor_factory, project_dir)
+    return template.generate_project(project_dir, mlf_path, graph_executor_factory)
