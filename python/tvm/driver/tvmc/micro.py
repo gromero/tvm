@@ -54,10 +54,12 @@ def add_micro_parser(subparsers):
     create_project_parser.add_argument("-V","--verbose", action="store_true", help="FIXME: Enable verbosity when building the new project.")
 
     # 'build' subcommand
-    build_parser = micro_parser.add_parser("build", help="build an image based on a project dir.")
+    build_parser = micro_parser.add_parser("build", help="build a project dir, generally creating an image to be flashed, e.g. zephyr.elf.")
     build_parser.set_defaults(subcommand=build_handler)
-    build_parser.add_argument('--target', required=True)
-    build_parser.add_argument('--board', required=True)
+    build_parser.add_argument("PROJECT_DIR", help="Project dir to build.")
+    build_parser.add_argument("--board", required=True, help="Target board.")
+    build_parser.add_argument("-f","--force", action="store_true", help="Force rebuild.")
+    build_parser.add_argument("-V","--verbose", action="store_true", help="Enable verbosity when building the project.")
 
     # 'flash' subcommand
     flash_parser = micro_parser.add_parser("flash", help="flash the built image on a given micro target.")
@@ -115,6 +117,28 @@ def create_project_handler(args):
 
 def build_handler(args):
     print("Calling build handler...")
+
+    if not os.path.exists(args.PROJECT_DIR):
+        raise TVMCException(f"{args.PROJECT_DIR} doesn't exist.")
+
+    if os.path.exists(args.PROJECT_DIR + "/build"):
+        if args.force:
+            shutil.rmtree(args.PROJECT_DIR + "/build")
+        else:
+            raise TVMCException(f"There is already a build in {args.PROJECT_DIR}. To force rebuild it use '-f' or '--force'.")
+
+    project_dir = args.PROJECT_DIR
+
+    # TODO(gromero): add arg to set 'west_cmd' too?
+    options = {
+        'zephyr_board': args.board,
+        'west_cmd': 'west',
+        'verbose': args.verbose,
+    }
+
+    _project = project.GeneratedProject.from_directory(project_dir, options=options)
+    _project.build()
+
 
 def flash_handler(args):
     print("Calling flash handler...")
