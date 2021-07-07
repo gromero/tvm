@@ -227,7 +227,7 @@ class TransportLogger(Transport):
     def write(self, data, timeout_sec):
         timeout_str = f"{timeout_sec:5.2f}s" if timeout_sec is not None else " None "
         try:
-            bytes_written = self.child.write(data, timeout_sec)
+            self.child.write(data, timeout_sec)
         except IoTimeoutError:
             self.logger.log(
                 self.level,
@@ -250,14 +250,14 @@ class TransportLogger(Transport):
             )
             raise err
 
-        hex_lines = self._to_hex(data[:bytes_written])
+        hex_lines = self._to_hex(data)
         if len(hex_lines) > 1:
             self.logger.log(
                 self.level,
                 "%s: write {%s}        <- [%3d B]:\n%s",
                 self.name,
                 timeout_str,
-                bytes_written,
+                len(data),
                 "\n".join(hex_lines),
             )
         else:
@@ -266,11 +266,10 @@ class TransportLogger(Transport):
                 "%s: write {%s}        <- [%3d B]: %s",
                 self.name,
                 timeout_str,
-                bytes_written,
+                len(data),
                 hex_lines[0],
             )
 
-        return bytes_written
 
 
 TransportContextManager = typing.ContextManager[Transport]
