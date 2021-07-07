@@ -64,6 +64,11 @@ def add_micro_parser(subparsers):
     # 'flash' subcommand
     flash_parser = micro_parser.add_parser("flash", help="flash the built image on a given micro target.")
     flash_parser.set_defaults(subcommand=flash_handler)
+    flash_parser.add_argument("PROJECT_DIR", help="Project dir with a image built.")
+    flash_parser.add_argument("--board", required=True, help="Target board.")
+    flash_parser.add_argument("-B","--build", action="store_true", help="Build image if one is not found in the project dir.")
+    flash_parser.add_argument("-V","--verbose", action="store_true", help="Enable verbosity when building the project.")
+    # TODO(gromero): list and select serial when multiple devices exist.
 
     # 'run' subcommand
     run_parser = micro_parser.add_parser("run", help="run a flashed image (with a model).")
@@ -143,6 +148,19 @@ def build_handler(args):
 def flash_handler(args):
     print("Calling flash handler...")
 
+    if not os.path.exists(args.PROJECT_DIR + "/build"):
+        raise TVMCException(f"Could not find a build in {args.PROJECT_DIR}")
+
+    project_dir = args.PROJECT_DIR
+
+    options = {
+        'zephyr_board': args.board,
+        'west_cmd': 'west',
+        'verbose': args.verbose,
+    }
+
+    _project = project.GeneratedProject.from_directory(project_dir, options=options)
+    _project.flash()
 
 def run_handler(args):
     print("Calling run handler...")
