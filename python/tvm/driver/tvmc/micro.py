@@ -1,4 +1,38 @@
+# tvmc micro create-project -l                                                   # list available templates
+# tvmc micro create-project -t [zephyr,arduino,mbed,...] PROJECT_DIR MLF_ARCHIVE # select template by type
+# tvmc micro create-project TEMPLATE_DIR PROJECT_DIR MLF_ARCHIVE [-d] [-t]       # -d enabled verbose when building
+# tvmc micro create-project -t zephyr /tmp/x10 --board [BOARD]                   # --board
+
+# tvmc micro build PROJECT_DIR options: list   # build project with options
+# tvmc micro build PROJECT_DIR --board -
+
+# tvmc micro flash -l                          # list serial ports
+# tvmc micro flash -p [SERIAL_PORT]            # flash built image to the device
+
+# tvmc run PROJECT_DIR -p [SERIAL_PORT]        # run flashed model on device attached to SERIAL_PORT
+
+# tvmc micro tunning ?
+
+import os
+import shutil
+from pathlib import Path
+
+import tvm.micro.project as project
 from .main import register_parser
+from .common import TVMCException
+
+
+ZEPHYR_TEMPLATE_DIR = os.getenv("TVM_HOME") + "/apps/microtvm/zephyr/template_project"
+
+
+TEMPLATE_TYPE = {'zephyr': ZEPHYR_TEMPLATE_DIR,}
+
+
+def template_types():
+    types = [ t for t in TEMPLATE_TYPE ]
+    types = ", ".join(types)
+    return types
+
 
 @register_parser
 def add_micro_parser(subparsers):
@@ -8,10 +42,16 @@ def add_micro_parser(subparsers):
     micro_parser = micro.add_subparsers(title="subcommands")
 
     # 'create_project' subcommand
-    create_project_parser = micro_parser.add_parser("create_project", help="create a project template of a given type.")
+    create_project_parser = micro_parser.add_parser("create-project", help="create a project template of a given type or given a template dir.")
     create_project_parser.set_defaults(subcommand=create_project_handler)
-    create_project_parser.add_argument("--type", required=True, help="type of the project to create a template. e.g Zephyr.")
-    create_project_parser.add_argument("--dir", help="output directory where the project template will be created.")
+    create_project_parser.add_argument("TEMPLATE_DIR", nargs='?', help="Project template directory to be used to create a new project.")
+    create_project_parser.add_argument("-t", "--template-type", choices=TEMPLATE_TYPE.keys(),
+        help=f"Specify a template type instead of a template dir to create a new project dir. Available types: {template_types()}.")
+    create_project_parser.add_argument("PROJECT_DIR", help="Project dir where the new project based on the template dir will be create.")
+    create_project_parser.add_argument("MLF", help="MLF .tar archive.")
+    create_project_parser.add_argument("--board", required=True, help="Target board.")
+    create_project_parser.add_argument("-f","--force", action="store_true", help="Force project creating even if the specified PROJECT_DIR already exists.")
+    create_project_parser.add_argument("-V","--verbose", action="store_true", help="FIXME: Enable verbosity when building the new project.")
 
     # 'build' subcommand
     build_parser = micro_parser.add_parser("build", help="build an image based on a project dir.")
@@ -27,19 +67,58 @@ def add_micro_parser(subparsers):
     run_parser = micro_parser.add_parser("run", help="run a flashed image (with a model).")
     run_parser.set_defaults(subcommand=run_handler)
 
+
 def drive_micro(args):
 #   print(f"{args.func}\n{args.subcommand}")
     # Call proper handler based on what parser found
     args.subcommand(args)
 
+
 def create_project_handler(args):
     print("Calling create_project handler...")
+
+    # print(args.verbose)
+    # print(args.TEMPLATE_DIR)
+    # print(args.template_type)
+
+    if args.TEMPLATE_DIR and args.template_type:
+        raise TVMCException("A template dir and a template type can't be both specified at the same time.")
+
+    if not args.TEMPLATE_DIR and not args.template_type:
+        raise TVMCException("Either a template dir or a template type must be specified!")
+
+    if args.TEMPLATE_DIR:
+        template_dir = args.TEMPLATE_DIR
+
+    if args.template_type:
+        template_dir = TEMPLATE_TYPE[args.template_type]
+
+    if os.path.exists(args.PROJECT_DIR):
+        if args.force:
+            shutil.rmtree(args.PROJECT_DIR)
+        else:
+            raise TVMCException("The specified project dir already exists. To force overwriting it use '-f' or '--force'.")
+
+    project_dir = args.PROJECT_DIR
+
+    mlf_path = str(Path(args.MLF).resolve())
+
+    # TODO(gromero): add arg to set 'west_cmd' too?
+    options = {
+        'zephyr_board': args.board,
+        'west_cmd': 'west',
+        'verbose': args.verbose,
+    }
+
+    project.generate_project(template_dir, project_dir, mlf_path=mlf_path, options=options)
+
 
 def build_handler(args):
     print("Calling build handler...")
 
 def flash_handler(args):
     print("Calling flash handler...")
+
 
 def run_handler(args):
     print("Calling run handler...")
